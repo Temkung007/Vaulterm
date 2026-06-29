@@ -47,8 +47,7 @@ base64 = "0.22"
 anyhow = "1"
 
 [profile.release]
-codegen-units = 1
-lto = true
 opt-level = "s"
-panic = "abort"
+lto = "thin"
 strip = true
+panic = "abort"
