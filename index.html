@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vaulterm</title>
+  </head>
+  <body>
+    <div id="app" class="hidden">
+      <!-- Sidebar: saved SSH connections -->
+      <aside id="sidebar">
+        <header class="sidebar__header">
+          <h1 class="sidebar__title">⚡ Vaulterm</h1>
+          <button id="btn-new" class="btn btn--primary" title="New connection (Ctrl+N)">
+            + New
+          </button>
+        </header>
+        <div class="sidebar__search">
+          <input id="search" type="text" placeholder="Search connections…" autocomplete="off" />
+        </div>
+        <ul id="conn-list" class="conn-list"></ul>
+        <footer class="sidebar__footer">
+          <span id="conn-count">0 connections</span>
+          <div class="sidebar__footer-actions">
+            <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
+            <button id="btn-lock" class="icon-btn" title="Lock vault (Ctrl+L)">🔒</button>
+          </div>
+        </footer>
+      </aside>
+
+      <!-- Main: terminal tabs -->
+      <main id="main">
+        <div id="tabbar" class="tabbar"></div>
+        <div id="terminals" class="terminals">
+          <div id="empty-state" class="empty-state">
+            <div class="empty-state__art">▮</div>
+            <h2>No active session</h2>
+            <p>Pick a saved connection on the left, or create a new one to get started.</p>
+            <button id="btn-new-2" class="btn btn--primary">+ New Connection</button>
+          </div>
+        </div>
+        <button id="btn-cmds" class="fab" title="Command palette (Ctrl+K)">⚡</button>
+      </main>
+    </div>
+
+    <!-- Lock screen (master password) -->
+    <div id="lock-screen" class="lock-screen">
+      <div class="lock-card">
+        <div class="lock-logo">⚡</div>
+        <h1 class="lock-title">Vaulterm</h1>
+        <p id="lock-sub" class="lock-sub">Unlock your vault</p>
+        <form id="lock-form" class="lock-form" autocomplete="off">
+          <input
+            id="lock-pw"
+            type="password"
+            placeholder="Master password"
+            autocomplete="off"
+          />
+          <input
+            id="lock-pw2"
+            type="password"
+            class="hidden"
+            placeholder="Confirm master password"
+            autocomplete="off"
+          />
+          <p id="lock-error" class="lock-error hidden"></p>
+          <button id="lock-submit" type="submit" class="btn btn--primary">Unlock</button>
+        </form>
+        <p id="lock-hint" class="lock-hint"></p>
+      </div>
+    </div>
+
+    <!-- Command palette (Ubuntu snippets) -->
+    <div id="palette-backdrop" class="palette-backdrop hidden">
+      <div id="palette" class="palette" role="dialog" aria-modal="true"></div>
+    </div>
+
+    <!-- Connection editor modal -->
+    <div id="modal-backdrop" class="modal-backdrop hidden">
+      <div class="modal" role="dialog" aria-modal="true">
+        <h2 id="modal-title" class="modal__title">New Connection</h2>
+        <form id="conn-form" class="form">
+          <input type="hidden" id="f-id" />
+
+          <label class="form__row">
+            <span>Name</span>
+            <input id="f-name" type="text" placeholder="My Server" required />
+          </label>
+
+          <div class="form__grid">
+            <label class="form__row form__row--host">
+              <span>Host</span>
+              <input id="f-host" type="text" placeholder="example.com / 192.168.1.10" required />
+            </label>
+            <label class="form__row form__row--port">
+              <span>Port</span>
+              <input id="f-port" type="number" value="22" min="1" max="65535" required />
+            </label>
+          </div>
+
+          <label class="form__row">
+            <span>Username</span>
+            <input id="f-user" type="text" placeholder="root" required />
+          </label>
+
+          <label class="form__row">
+            <span>Authentication</span>
+            <select id="f-auth">
+              <option value="password">Password</option>
+              <option value="key">Private key (file)</option>
+              <option value="key_text">Private key (paste)</option>
+            </select>
+          </label>
+
+          <label class="form__row auth-field auth-password">
+            <span>Password</span>
+            <input id="f-password" type="password" placeholder="••••••••  (stored in OS keychain)" autocomplete="off" />
+          </label>
+
+          <label class="form__row auth-field auth-key">
+            <span>Private key path</span>
+            <div class="input-with-button">
+              <input id="f-keypath" type="text" placeholder="C:\\Users\\you\\.ssh\\id_ed25519" autocomplete="off" />
+              <button type="button" id="btn-browse-key" class="btn btn--ghost">Browse…</button>
+            </div>
+          </label>
+
+          <label class="form__row auth-field auth-keytext">
+            <span>Private key <em>(paste OpenSSH / PEM)</em></span>
+            <textarea
+              id="f-keytext"
+              class="key-textarea"
+              rows="6"
+              spellcheck="false"
+              autocomplete="off"
+              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;…&#10;-----END OPENSSH PRIVATE KEY-----"
+            ></textarea>
+          </label>
+
+          <label class="form__row auth-field auth-key auth-keytext">
+            <span>Key passphrase <em>(optional)</em></span>
+            <input id="f-passphrase" type="password" placeholder="leave empty if none" autocomplete="off" />
+          </label>
+
+          <p id="form-error" class="form__error hidden"></p>
+
+          <div class="form__actions">
+            <button type="button" id="btn-cancel" class="btn btn--ghost">Cancel</button>
+            <button type="submit" id="btn-save" class="btn btn--primary">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Remote file browser + editor -->
+    <div id="files-backdrop" class="files-backdrop hidden">
+      <div class="files">
+        <header class="files__header">
+          <span id="files-title" class="files__title">Files</span>
+          <button id="files-close" class="icon-btn" title="Close (Esc)">✕</button>
+        </header>
+        <div class="files__pathbar">
+          <button id="files-up" class="btn btn--ghost" title="Up one level">⬆</button>
+          <input id="files-path" class="files__path" readonly />
+          <button id="files-refresh" class="btn btn--ghost" title="Refresh">⟳</button>
+        </div>
+        <div class="files__body">
+          <ul id="files-list" class="files__list"></ul>
+          <div class="files__editor">
+            <div class="files__editor-head">
+              <span id="files-openpath" class="files__openpath">No file open</span>
+              <button id="files-save" class="btn btn--primary" disabled>Save</button>
+            </div>
+            <textarea
+              id="files-content"
+              class="files__textarea"
+              spellcheck="false"
+              readonly
+              placeholder="Select a file on the left to view & edit…"
+            ></textarea>
+          </div>
+        </div>
+        <div id="files-status" class="files__status"></div>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div id="settings-backdrop" class="modal-backdrop hidden">
+      <div class="modal" role="dialog" aria-modal="true">
+        <h2 class="modal__title">Settings</h2>
+        <div class="form">
+          <label class="form__row">
+            <span>Auto-lock after inactivity <em>(minutes, 0 = never)</em></span>
+            <input id="set-autolock" type="number" min="0" max="1440" value="0" />
+          </label>
+          <div class="form__actions">
+            <button id="set-save" type="button" class="btn btn--primary">Save</button>
+          </div>
+
+          <hr class="form__sep" />
+
+          <h3 class="form__subtitle">Change master password</h3>
+          <label class="form__row">
+            <span>Current password</span>
+            <input id="cp-current" type="password" autocomplete="off" />
+          </label>
+          <label class="form__row">
+            <span>New password</span>
+            <input id="cp-new" type="password" autocomplete="off" />
+          </label>
+          <label class="form__row">
+            <span>Confirm new password</span>
+            <input id="cp-new2" type="password" autocomplete="off" />
+          </label>
+
+          <p id="set-msg" class="form__error hidden"></p>
+
+          <div class="form__actions">
+            <button id="set-close" type="button" class="btn btn--ghost">Close</button>
+            <button id="cp-change" type="button" class="btn btn--primary">Change password</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

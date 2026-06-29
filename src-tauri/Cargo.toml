@@ -1,0 +1,54 @@
+[package]
+name = "vaulterm"
+version = "0.1.0"
+description = "An SSH terminal that saves connections in an encrypted vault"
+authors = ["you"]
+edition = "2021"
+rust-version = "1.77"
+
+# The library is what holds the app logic so it can be reused on mobile.
+# main.rs just calls `run()`.
+[lib]
+name = "vaulterm_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime for the SSH session pump (Tauri runs on tokio under the hood).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time"] }
+
+# SSH client. Key types live in `russh::keys` (do NOT add russh-keys).
+# Use the `ring` crypto backend instead of the default `aws-lc-rs`, which needs
+# NASM + CMake to build on Windows; `ring` builds with just the MSVC C compiler.
+russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
+# SFTP subsystem on top of russh channels (remote file browse/read/write).
+russh-sftp = "2.3"
+
+# Master-password vault: Argon2id derives a key from the password, AES-256-GCM
+# provides authenticated encryption of everything at rest. zeroize wipes the
+# derived key from memory on lock.
+argon2 = "0.5"
+aes-gcm = "0.10"
+getrandom = "0.2"
+zeroize = "1"
+
+# Per-user config directory + ids + base64 for the PTY byte bridge.
+directories = "6"
+uuid = { version = "1", features = ["v4", "serde"] }
+base64 = "0.22"
+anyhow = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

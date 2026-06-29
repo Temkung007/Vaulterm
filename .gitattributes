@@ -1,0 +1,10 @@
+# Normalize line endings: store text as LF in the repo and the working tree.
+* text=auto eol=lf
+
+# Treat binary assets as binary (no EOL conversion / diff).
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.woff binary
+*.woff2 binary
