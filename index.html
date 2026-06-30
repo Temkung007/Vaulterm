@@ -162,6 +162,8 @@
         <div class="files__pathbar">
           <button id="files-up" class="btn btn--ghost" title="Up one level">⬆</button>
           <input id="files-path" class="files__path" readonly />
+          <button id="files-newfolder" class="btn btn--ghost" title="New folder">＋ Folder</button>
+          <button id="files-upload" class="btn btn--ghost" title="Upload files here">↥ Upload</button>
           <button id="files-refresh" class="btn btn--ghost" title="Refresh">⟳</button>
         </div>
         <div class="files__body">
@@ -212,6 +214,18 @@
             <span>Confirm new password</span>
             <input id="cp-new2" type="password" autocomplete="off" />
           </label>
+
+          <hr class="form__sep" />
+
+          <h3 class="form__subtitle">Vault backup</h3>
+          <div class="backup-actions">
+            <button id="vault-export" type="button" class="btn btn--ghost">Export backup…</button>
+            <button id="vault-import" type="button" class="btn btn--ghost">Restore backup…</button>
+          </div>
+          <p class="form__note">
+            The backup is your encrypted vault file — it still needs the master password to open.
+            Restoring replaces your current vault and re-locks the app.
+          </p>
 
           <p id="set-msg" class="form__error hidden"></p>
 

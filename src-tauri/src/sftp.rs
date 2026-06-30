@@ -8,7 +8,7 @@ use russh::client::Handle;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
 use serde::Serialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
 
 use crate::ssh::{self, ClientHandler, SshConnectError};
 use crate::store::{Connection, KnownHost};
@@ -114,5 +114,58 @@ impl SftpConn {
         file.flush().await.map_err(|e| e.to_string())?;
         file.shutdown().await.map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// Upload a local file to `remote` (streamed; handles binary + large files).
+    pub async fn upload(&self, local: &str, remote: &str) -> Result<(), String> {
+        let mut src = tokio::fs::File::open(local).await.map_err(|e| e.to_string())?;
+        let mut dst = self
+            .session
+            .open_with_flags(remote, OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE)
+            .await
+            .map_err(|e| e.to_string())?;
+        copy(&mut src, &mut dst).await.map_err(|e| e.to_string())?;
+        dst.flush().await.map_err(|e| e.to_string())?;
+        dst.shutdown().await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Download `remote` to a local path (streamed).
+    pub async fn download(&self, remote: &str, local: &str) -> Result<(), String> {
+        let mut src = self
+            .session
+            .open_with_flags(remote, OpenFlags::READ)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut dst = tokio::fs::File::create(local).await.map_err(|e| e.to_string())?;
+        copy(&mut src, &mut dst).await.map_err(|e| e.to_string())?;
+        dst.flush().await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn mkdir(&self, path: &str) -> Result<(), String> {
+        self.session.create_dir(path).await.map_err(|e| e.to_string())
+    }
+
+    pub async fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+        self.session.rename(from, to).await.map_err(|e| e.to_string())
+    }
+
+    pub async fn remove_file(&self, path: &str) -> Result<(), String> {
+        self.session.remove_file(path).await.map_err(|e| e.to_string())
+    }
+
+    /// Recursively delete a directory and its contents.
+    pub async fn remove_dir_recursive(&self, path: &str) -> Result<(), String> {
+        let entries = self.session.read_dir(path).await.map_err(|e| e.to_string())?;
+        for entry in entries {
+            let child = format!("{}/{}", path.trim_end_matches('/'), entry.file_name());
+            if entry.file_type().is_dir() {
+                Box::pin(self.remove_dir_recursive(&child)).await?;
+            } else {
+                self.session.remove_file(&child).await.map_err(|e| e.to_string())?;
+            }
+        }
+        self.session.remove_dir(path).await.map_err(|e| e.to_string())
     }
 }

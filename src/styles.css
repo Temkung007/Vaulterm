@@ -463,6 +463,15 @@ body {
   font-weight: 600;
   color: var(--text);
 }
+.backup-actions {
+  display: flex;
+  gap: 8px;
+}
+.form__note {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
 .sidebar__footer-actions {
   display: flex;
   gap: 2px;
@@ -812,6 +821,13 @@ body {
 }
 .files__item:hover {
   background: var(--bg-elev-2);
+}
+.files__item-actions {
+  display: none;
+  gap: 2px;
+}
+.files__item:hover .files__item-actions {
+  display: flex;
 }
 .files__item--dir .files__name {
   color: var(--accent-hover);

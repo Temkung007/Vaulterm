@@ -23,7 +23,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Async runtime for the SSH session pump (Tauri runs on tokio under the hood).
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time", "fs"] }
 
 # SSH client. Key types live in `russh::keys` (do NOT add russh-keys).
 # Use the `ring` crypto backend instead of the default `aws-lc-rs`, which needs

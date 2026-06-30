@@ -171,3 +171,28 @@ export function sftpWrite(connectionId: string, path: string, content: string): 
 export function sftpClose(connectionId: string): Promise<void> {
   return invoke("sftp_close", { connectionId });
 }
+export function sftpUpload(connectionId: string, localPath: string, remotePath: string): Promise<void> {
+  return invoke("sftp_upload", { connectionId, localPath, remotePath });
+}
+export function sftpDownload(connectionId: string, remotePath: string, localPath: string): Promise<void> {
+  return invoke("sftp_download", { connectionId, remotePath, localPath });
+}
+export function sftpMkdir(connectionId: string, path: string): Promise<void> {
+  return invoke("sftp_mkdir", { connectionId, path });
+}
+export function sftpRename(connectionId: string, from: string, to: string): Promise<void> {
+  return invoke("sftp_rename", { connectionId, from, to });
+}
+export function sftpDelete(connectionId: string, path: string, isDir: boolean): Promise<void> {
+  return invoke("sftp_delete", { connectionId, path, isDir });
+}
+
+// ---- Vault backup / restore -------------------------------------------------
+
+export function vaultExport(destPath: string): Promise<void> {
+  return invoke("vault_export", { destPath });
+}
+/** Replace the current vault with a backup; the app re-locks afterwards. */
+export function vaultImport(srcPath: string): Promise<void> {
+  return invoke("vault_import", { srcPath });
+}

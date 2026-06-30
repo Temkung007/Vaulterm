@@ -35,6 +35,8 @@ pub fn run() {
             commands::vault_unlock,
             commands::vault_lock,
             commands::vault_change_password,
+            commands::vault_export,
+            commands::vault_import,
             commands::get_settings,
             commands::save_settings,
             commands::list_connections,
@@ -51,6 +53,11 @@ pub fn run() {
             commands::sftp_list,
             commands::sftp_read,
             commands::sftp_write,
+            commands::sftp_upload,
+            commands::sftp_download,
+            commands::sftp_mkdir,
+            commands::sftp_rename,
+            commands::sftp_delete,
             commands::sftp_close,
         ])
         .run(tauri::generate_context!())

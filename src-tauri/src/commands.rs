@@ -64,6 +64,18 @@ pub fn vault_change_password(
         .map_err(|e| e.to_string())
 }
 
+/// Back up the encrypted vault file to `dest_path`.
+#[tauri::command]
+pub fn vault_export(state: State<'_, AppState>, dest_path: String) -> Result<(), String> {
+    state.vault.export_to(&dest_path).map_err(|e| e.to_string())
+}
+
+/// Restore a backup over the current vault (then re-lock).
+#[tauri::command]
+pub fn vault_import(state: State<'_, AppState>, src_path: String) -> Result<(), String> {
+    state.vault.import_from(&src_path).map_err(|e| e.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
@@ -358,6 +370,66 @@ pub async fn sftp_write(
         .await?
         .write(&path, &content)
         .await
+}
+
+#[tauri::command]
+pub async fn sftp_upload(
+    state: State<'_, AppState>,
+    connection_id: String,
+    local_path: String,
+    remote_path: String,
+) -> Result<(), String> {
+    get_sftp(state.inner(), &connection_id)
+        .await?
+        .upload(&local_path, &remote_path)
+        .await
+}
+
+#[tauri::command]
+pub async fn sftp_download(
+    state: State<'_, AppState>,
+    connection_id: String,
+    remote_path: String,
+    local_path: String,
+) -> Result<(), String> {
+    get_sftp(state.inner(), &connection_id)
+        .await?
+        .download(&remote_path, &local_path)
+        .await
+}
+
+#[tauri::command]
+pub async fn sftp_mkdir(
+    state: State<'_, AppState>,
+    connection_id: String,
+    path: String,
+) -> Result<(), String> {
+    get_sftp(state.inner(), &connection_id).await?.mkdir(&path).await
+}
+
+#[tauri::command]
+pub async fn sftp_rename(
+    state: State<'_, AppState>,
+    connection_id: String,
+    from: String,
+    to: String,
+) -> Result<(), String> {
+    get_sftp(state.inner(), &connection_id).await?.rename(&from, &to).await
+}
+
+#[tauri::command]
+pub async fn sftp_delete(
+    state: State<'_, AppState>,
+    connection_id: String,
+    path: String,
+    is_dir: bool,
+) -> Result<(), String> {
+    let s = get_sftp(state.inner(), &connection_id).await?;
+    if is_dir {
+        s.remove_dir_recursive(&path).await
+    } else {
+        s.remove_file(&path).await
+    }
 }
 
 #[tauri::command]

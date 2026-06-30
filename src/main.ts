@@ -5,6 +5,7 @@ import { ConnectionModal, connectionSubtitle, type SavePayload } from "./connect
 import { TerminalSession, type SessionStatus } from "./terminal";
 import { CommandPalette } from "./snippets";
 import { FilesBrowser } from "./files";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 // ---- DOM refs ---------------------------------------------------------------
 
@@ -382,6 +383,34 @@ async function handleChangePassword(): Promise<void> {
   }
 }
 
+async function handleExportVault(): Promise<void> {
+  try {
+    const dest = await save({ defaultPath: "vaulterm-vault-backup.json", title: "Export vault backup" });
+    if (!dest) return;
+    await api.vaultExport(dest);
+    setSettingsMsg(`Backup saved to ${dest}`, true);
+  } catch (e) {
+    setSettingsMsg(errText(e), false);
+  }
+}
+
+async function handleImportVault(): Promise<void> {
+  const ok = confirm(
+    "Restore a vault backup?\n\nThis REPLACES your current vault and everything in it. " +
+      "You'll need the backup's master password to unlock. Continue?",
+  );
+  if (!ok) return;
+  try {
+    const src = await open({ multiple: false, directory: false, title: "Choose a vault backup (.json)" });
+    if (!src || Array.isArray(src)) return;
+    await api.vaultImport(src);
+    closeSettings();
+    await lockApp(); // backend re-locked — unlock with the imported password
+  } catch (e) {
+    setSettingsMsg(errText(e), false);
+  }
+}
+
 function errText(e: unknown): string {
   if (typeof e === "string") return e;
   if (e && typeof e === "object" && typeof (e as { message?: unknown }).message === "string") {
@@ -402,6 +431,8 @@ function bindUi(): void {
   $("set-save").addEventListener("click", () => void handleSaveSettings());
   $("set-close").addEventListener("click", closeSettings);
   $("cp-change").addEventListener("click", () => void handleChangePassword());
+  $("vault-export").addEventListener("click", () => void handleExportVault());
+  $("vault-import").addEventListener("click", () => void handleImportVault());
   settingsBackdropEl.addEventListener("mousedown", (e) => {
     if (e.target === settingsBackdropEl) closeSettings();
   });

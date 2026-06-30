@@ -1,3 +1,4 @@
+import { open, save } from "@tauri-apps/plugin-dialog";
 import * as api from "./api";
 import type { Connection, FileEntry } from "./api";
 
@@ -20,6 +21,10 @@ function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+function basename(p: string): string {
+  const parts = p.split(/[\\/]/);
+  return parts[parts.length - 1] || p;
 }
 function errText(e: unknown): string {
   if (typeof e === "string") return e;
@@ -63,6 +68,8 @@ export class FilesBrowser {
     $("files-close").addEventListener("click", () => this.close());
     $("files-up").addEventListener("click", () => void this.navigate(parentPath(this.currentPath)));
     $("files-refresh").addEventListener("click", () => void this.navigate(this.currentPath));
+    $("files-newfolder").addEventListener("click", () => void this.newFolder());
+    $("files-upload").addEventListener("click", () => void this.uploadFiles());
     this.saveBtn.addEventListener("click", () => void this.save());
     this.contentEl.addEventListener("input", () => this.setDirty(true));
     this.backdrop.addEventListener("mousedown", (e) => {
@@ -140,11 +147,116 @@ export class FilesBrowser {
       if (!entry.isDir) item.append(el("span", "files__size", fmtSize(entry.size)));
 
       const full = joinPath(this.currentPath, entry.name);
+
+      const acts = el("div", "files__item-actions");
+      if (!entry.isDir) {
+        const dl = el("button", "icon-btn", "⬇");
+        dl.title = "Download";
+        dl.addEventListener("click", (e) => {
+          e.stopPropagation();
+          void this.downloadFile(entry.name, full);
+        });
+        acts.append(dl);
+      }
+      const rn = el("button", "icon-btn", "✎");
+      rn.title = "Rename";
+      rn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void this.renameItem(entry.name, full);
+      });
+      const del = el("button", "icon-btn icon-btn--danger", "🗑");
+      del.title = "Delete";
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void this.deleteItem(entry, full);
+      });
+      acts.append(rn, del);
+      item.append(acts);
+
       item.addEventListener("click", () => {
         if (entry.isDir) void this.navigate(full);
         else void this.loadFile(full);
       });
       this.listEl.append(item);
+    }
+  }
+
+  // ---- file operations ----
+  private async uploadFiles(): Promise<void> {
+    if (!this.conn) return;
+    const sel = await open({ multiple: true, directory: false, title: "Upload files" });
+    if (!sel) return;
+    const locals = Array.isArray(sel) ? sel : [sel];
+    this.setStatus(`Uploading ${locals.length} file(s)…`);
+    try {
+      for (const local of locals) {
+        await api.sftpUpload(this.conn.id, local, joinPath(this.currentPath, basename(local)));
+      }
+      await this.navigate(this.currentPath);
+      this.setStatus(`Uploaded ${locals.length} file(s)`, "ok");
+    } catch (e) {
+      this.setStatus(errText(e), "error");
+    }
+  }
+
+  private async newFolder(): Promise<void> {
+    if (!this.conn) return;
+    const name = prompt("New folder name:");
+    if (!name || !name.trim()) return;
+    try {
+      await api.sftpMkdir(this.conn.id, joinPath(this.currentPath, name.trim()));
+      await this.navigate(this.currentPath);
+      this.setStatus(`Created ${name.trim()}`, "ok");
+    } catch (e) {
+      this.setStatus(errText(e), "error");
+    }
+  }
+
+  private async downloadFile(name: string, remote: string): Promise<void> {
+    if (!this.conn) return;
+    const dest = await save({ defaultPath: name, title: "Save file as" });
+    if (!dest) return;
+    this.setStatus(`Downloading ${name}…`);
+    try {
+      await api.sftpDownload(this.conn.id, remote, dest);
+      this.setStatus(`Downloaded to ${dest}`, "ok");
+    } catch (e) {
+      this.setStatus(errText(e), "error");
+    }
+  }
+
+  private async renameItem(name: string, full: string): Promise<void> {
+    if (!this.conn) return;
+    const next = prompt(`Rename "${name}" to:`, name);
+    if (!next || !next.trim() || next.trim() === name) return;
+    const target = joinPath(this.currentPath, next.trim());
+    try {
+      await api.sftpRename(this.conn.id, full, target);
+      if (this.openPath === full) {
+        this.openPath = target;
+        this.openPathEl.textContent = target;
+      }
+      await this.navigate(this.currentPath);
+      this.setStatus("Renamed", "ok");
+    } catch (e) {
+      this.setStatus(errText(e), "error");
+    }
+  }
+
+  private async deleteItem(entry: FileEntry, full: string): Promise<void> {
+    if (!this.conn) return;
+    const what = entry.isDir
+      ? `folder "${entry.name}" and everything inside it`
+      : `file "${entry.name}"`;
+    if (!confirm(`Delete ${what} on ${this.conn.host}?\n\nThis cannot be undone.`)) return;
+    this.setStatus(`Deleting ${entry.name}…`);
+    try {
+      await api.sftpDelete(this.conn.id, full, entry.isDir);
+      if (this.openPath === full) this.clearEditor();
+      await this.navigate(this.currentPath);
+      this.setStatus(`Deleted ${entry.name}`, "ok");
+    } catch (e) {
+      this.setStatus(errText(e), "error");
     }
   }
 

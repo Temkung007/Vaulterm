@@ -211,6 +211,32 @@ impl Vault {
         Ok(())
     }
 
+    /// Back up the (already-encrypted) vault file to `dest`. Safe to store
+    /// anywhere — it still needs the master password to open.
+    pub fn export_to(&self, dest: &str) -> Result<()> {
+        let src = vault_path()?;
+        if !src.exists() {
+            bail!("there is no vault to export yet");
+        }
+        fs::copy(&src, dest).with_context(|| format!("exporting vault to {dest}"))?;
+        Ok(())
+    }
+
+    /// Replace the current vault with a backup file, then lock. The user must
+    /// unlock with the *backup's* master password afterwards.
+    pub fn import_from(&self, src: &str) -> Result<()> {
+        let raw = fs::read_to_string(src).with_context(|| format!("reading {src}"))?;
+        // Validate it's actually a Vaulterm vault before overwriting.
+        serde_json::from_str::<VaultFile>(&raw)
+            .map_err(|_| anyhow!("that file is not a valid Vaulterm vault"))?;
+        let dest = vault_path()?;
+        let tmp = dest.with_extension("json.tmp");
+        fs::write(&tmp, &raw).with_context(|| format!("writing {tmp:?}"))?;
+        fs::rename(&tmp, &dest).with_context(|| format!("replacing {dest:?}"))?;
+        *self.inner.lock().unwrap() = None; // force a re-unlock with the new password
+        Ok(())
+    }
+
     /// Read the decrypted data. Errors if locked.
     pub fn read<R>(&self, f: impl FnOnce(&VaultData) -> R) -> Result<R> {
         let guard = self.inner.lock().unwrap();
