@@ -5,6 +5,9 @@ export function connectionSubtitle(c: Connection): string {
   return `${c.username || "user"}@${c.host || "host"}:${c.port}`;
 }
 
+/** Preset accent colors ("" = none). */
+export const CONNECTION_COLORS = ["", "#f85149", "#d29922", "#3fb950", "#2f81f7", "#a371f7", "#db61a2"];
+
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
   if (!el) throw new Error(`missing element #${id}`);
@@ -40,10 +43,15 @@ export class ConnectionModal {
   private fKeyPath = $<HTMLInputElement>("f-keypath");
   private fKeyText = $<HTMLTextAreaElement>("f-keytext");
   private fPassphrase = $<HTMLInputElement>("f-passphrase");
+  private fGroup = $<HTMLInputElement>("f-group");
+  private fStartup = $<HTMLTextAreaElement>("f-startup");
+  private fColorsEl = $<HTMLDivElement>("f-colors");
 
   // Captured here so we can restore it after edit mode swaps the placeholder.
   private keyPlaceholder = this.fKeyText.placeholder;
   private editing = false;
+  private selectedColor = "";
+  private currentFavorite = false;
 
   constructor(private onSave: (payload: SavePayload) => void | Promise<void>) {
     this.fAuth.addEventListener("change", () => this.syncAuthFields());
@@ -56,6 +64,35 @@ export class ConnectionModal {
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !this.backdrop.classList.contains("hidden")) this.close();
     });
+    this.renderColorSwatches();
+  }
+
+  private renderColorSwatches(): void {
+    this.fColorsEl.replaceChildren();
+    for (const color of CONNECTION_COLORS) {
+      const sw = document.createElement("button");
+      sw.type = "button";
+      sw.className = "color-swatch";
+      sw.dataset.color = color;
+      if (color) {
+        sw.style.background = color;
+      } else {
+        sw.classList.add("color-swatch--none");
+        sw.textContent = "∅";
+      }
+      sw.title = color || "No color";
+      sw.addEventListener("click", () => {
+        this.selectedColor = color;
+        this.updateColorSelection();
+      });
+      this.fColorsEl.append(sw);
+    }
+  }
+
+  private updateColorSelection(): void {
+    this.fColorsEl.querySelectorAll<HTMLElement>(".color-swatch").forEach((sw) => {
+      sw.classList.toggle("selected", (sw.dataset.color || "") === this.selectedColor);
+    });
   }
 
   openNew(): void {
@@ -67,6 +104,9 @@ export class ConnectionModal {
     this.fAuth.value = "password";
     this.fPassword.placeholder = "••••••••  (stored in OS keychain)";
     this.fKeyText.placeholder = this.keyPlaceholder;
+    this.selectedColor = "";
+    this.currentFavorite = false;
+    this.updateColorSelection();
     this.syncAuthFields();
     this.show();
     this.fName.focus();
@@ -89,6 +129,11 @@ export class ConnectionModal {
     this.fKeyText.value = "";
     this.fPassword.placeholder = "leave blank to keep saved password";
     this.fKeyText.placeholder = "leave blank to keep the saved key";
+    this.fGroup.value = c.group ?? "";
+    this.fStartup.value = c.startupCommands ?? "";
+    this.selectedColor = c.color ?? "";
+    this.currentFavorite = c.favorite ?? false;
+    this.updateColorSelection();
     this.syncAuthFields();
     this.show();
     this.fName.focus();
@@ -166,6 +211,10 @@ export class ConnectionModal {
       username: this.fUser.value.trim(),
       authType: auth,
       keyPath: auth === "key" ? this.fKeyPath.value.trim() : null,
+      group: this.fGroup.value.trim() || null,
+      favorite: this.currentFavorite,
+      color: this.selectedColor || null,
+      startupCommands: this.fStartup.value.trim() || null,
     };
 
     // Determine the secret. Blank on edit => keep existing (null).

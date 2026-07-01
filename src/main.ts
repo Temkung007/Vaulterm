@@ -55,6 +55,17 @@ let appUnlocked = false;
 let lockMode: "create" | "unlock" = "unlock";
 let autoLockMinutes = 0;
 let idleTimer: number | undefined;
+let favOnly = false;
+let dragId: string | null = null;
+
+function loadCollapsedGroups(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem("vaulterm.collapsedGroups") || "[]");
+  } catch {
+    return [];
+  }
+}
+const collapsedGroups = new Set<string>(loadCollapsedGroups());
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -79,64 +90,173 @@ function connectionStatus(connectionId: string): SessionStatus | null {
   return status;
 }
 
+function buildConnItem(conn: Connection): HTMLLIElement {
+  const item = el("li", "conn-item");
+  item.dataset.id = conn.id;
+  item.draggable = true;
+
+  const status = connectionStatus(conn.id);
+  if (status) item.classList.add(status);
+  if (conn.color) {
+    item.classList.add("has-color");
+    item.style.setProperty("--accent-color", conn.color);
+  }
+
+  const dot = el("span", "conn-item__dot");
+
+  const star = el("button", `conn-item__star${conn.favorite ? " on" : ""}`, conn.favorite ? "★" : "☆");
+  star.title = conn.favorite ? "Unfavorite" : "Favorite";
+  star.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void toggleFavorite(conn);
+  });
+
+  const body = el("div", "conn-item__body");
+  body.append(el("div", "conn-item__name", conn.name || "(unnamed)"));
+  body.append(el("div", "conn-item__sub", connectionSubtitle(conn)));
+
+  const actions = el("div", "conn-item__actions");
+  const filesBtn = el("button", "icon-btn", "📁");
+  filesBtn.title = "Browse files";
+  filesBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void filesBrowser.open(conn);
+  });
+  const editBtn = el("button", "icon-btn", "✎");
+  editBtn.title = "Edit";
+  editBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    modal.openEdit(conn);
+  });
+  const delBtn = el("button", "icon-btn icon-btn--danger", "🗑");
+  delBtn.title = "Delete";
+  delBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void removeConnection(conn);
+  });
+  actions.append(filesBtn, editBtn, delBtn);
+
+  item.append(dot, star, body, actions);
+  item.addEventListener("click", () => void openSession(conn));
+
+  // Drag to reorder.
+  item.addEventListener("dragstart", (e) => {
+    dragId = conn.id;
+    item.classList.add("dragging");
+    e.dataTransfer?.setData("text/plain", conn.id);
+  });
+  item.addEventListener("dragend", () => {
+    dragId = null;
+    connListEl.querySelectorAll(".conn-item").forEach((x) => x.classList.remove("dragging", "drop-target"));
+  });
+  item.addEventListener("dragover", (e) => {
+    if (dragId && dragId !== conn.id) {
+      e.preventDefault();
+      item.classList.add("drop-target");
+    }
+  });
+  item.addEventListener("dragleave", () => item.classList.remove("drop-target"));
+  item.addEventListener("drop", (e) => {
+    e.preventDefault();
+    item.classList.remove("drop-target");
+    void handleReorderDrop(conn.id);
+  });
+
+  return item;
+}
+
 function renderSidebar(): void {
   const filter = searchEl.value.trim().toLowerCase();
-  const shown = connections.filter(
-    (c) =>
-      !filter ||
+  const shown = connections.filter((c) => {
+    if (favOnly && !c.favorite) return false;
+    if (!filter) return true;
+    return (
       c.name.toLowerCase().includes(filter) ||
       c.host.toLowerCase().includes(filter) ||
-      c.username.toLowerCase().includes(filter),
-  );
+      c.username.toLowerCase().includes(filter) ||
+      (c.group ?? "").toLowerCase().includes(filter)
+    );
+  });
 
   connListEl.replaceChildren();
+  updateGroupDatalist();
 
   if (shown.length === 0) {
     const empty = el("li", "conn-list__empty");
     empty.textContent = connections.length === 0 ? "No saved connections yet." : "No matches.";
     empty.style.cssText = "padding:16px;color:var(--text-faint);font-size:13px;text-align:center;";
     connListEl.append(empty);
-  }
-
-  for (const conn of shown) {
-    const item = el("li", "conn-item");
-    item.dataset.id = conn.id;
-
-    const status = connectionStatus(conn.id);
-    if (status) item.classList.add(status);
-
-    const dot = el("span", "conn-item__dot");
-    const body = el("div", "conn-item__body");
-    body.append(el("div", "conn-item__name", conn.name || "(unnamed)"));
-    body.append(el("div", "conn-item__sub", connectionSubtitle(conn)));
-
-    const actions = el("div", "conn-item__actions");
-    const filesBtn = el("button", "icon-btn", "📁");
-    filesBtn.title = "Browse files";
-    filesBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      void filesBrowser.open(conn);
-    });
-    const editBtn = el("button", "icon-btn", "✎");
-    editBtn.title = "Edit";
-    editBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      modal.openEdit(conn);
-    });
-    const delBtn = el("button", "icon-btn icon-btn--danger", "🗑");
-    delBtn.title = "Delete";
-    delBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      void removeConnection(conn);
-    });
-    actions.append(filesBtn, editBtn, delBtn);
-
-    item.append(dot, body, actions);
-    item.addEventListener("click", () => void openSession(conn));
-    connListEl.append(item);
+  } else if (!shown.some((c) => (c.group ?? "").trim() !== "")) {
+    for (const conn of shown) connListEl.append(buildConnItem(conn));
+  } else {
+    const groups = new Map<string, Connection[]>();
+    for (const conn of shown) {
+      const g = (conn.group ?? "").trim() || "Ungrouped";
+      const bucket = groups.get(g) ?? [];
+      bucket.push(conn);
+      groups.set(g, bucket);
+    }
+    const names = [...groups.keys()].sort((a, b) =>
+      a === "Ungrouped" ? 1 : b === "Ungrouped" ? -1 : a.localeCompare(b),
+    );
+    for (const name of names) {
+      const collapsed = collapsedGroups.has(name);
+      const header = el("li", "conn-group");
+      header.append(el("span", "conn-group__caret", collapsed ? "▸" : "▾"));
+      header.append(el("span", "conn-group__name", name));
+      header.append(el("span", "conn-group__count", String(groups.get(name)!.length)));
+      header.addEventListener("click", () => toggleGroup(name));
+      connListEl.append(header);
+      if (!collapsed) for (const conn of groups.get(name)!) connListEl.append(buildConnItem(conn));
+    }
   }
 
   connCountEl.textContent = `${connections.length} connection${connections.length === 1 ? "" : "s"}`;
+}
+
+function updateGroupDatalist(): void {
+  const dl = document.getElementById("group-list");
+  if (!dl) return;
+  const names = [...new Set(connections.map((c) => (c.group ?? "").trim()).filter(Boolean))].sort();
+  dl.replaceChildren(
+    ...names.map((n) => {
+      const o = document.createElement("option");
+      o.value = n;
+      return o;
+    }),
+  );
+}
+
+function toggleGroup(name: string): void {
+  if (collapsedGroups.has(name)) collapsedGroups.delete(name);
+  else collapsedGroups.add(name);
+  localStorage.setItem("vaulterm.collapsedGroups", JSON.stringify([...collapsedGroups]));
+  renderSidebar();
+}
+
+async function toggleFavorite(conn: Connection): Promise<void> {
+  try {
+    await api.saveConnection({ ...conn, favorite: !conn.favorite }, null, null);
+    connections = await api.listConnections();
+    renderSidebar();
+  } catch (e) {
+    console.error("toggle favorite failed", e);
+  }
+}
+
+async function handleReorderDrop(targetId: string): Promise<void> {
+  if (!dragId || dragId === targetId) return;
+  const from = connections.findIndex((c) => c.id === dragId);
+  if (from < 0) return;
+  const [moved] = connections.splice(from, 1);
+  const to = connections.findIndex((c) => c.id === targetId);
+  connections.splice(to < 0 ? connections.length : to, 0, moved);
+  renderSidebar();
+  try {
+    await api.reorderConnections(connections.map((c) => c.id));
+  } catch (e) {
+    console.error("reorder failed", e);
+  }
 }
 
 // ---- Sessions / tabs --------------------------------------------------------
@@ -437,6 +557,13 @@ function bindUi(): void {
     if (e.target === settingsBackdropEl) closeSettings();
   });
   searchEl.addEventListener("input", renderSidebar);
+  $("fav-filter").addEventListener("click", () => {
+    favOnly = !favOnly;
+    const b = $("fav-filter");
+    b.textContent = favOnly ? "★" : "☆";
+    b.classList.toggle("active", favOnly);
+    renderSidebar();
+  });
 
   // Any user activity resets the idle auto-lock timer.
   const activity = (): void => resetIdleTimer();

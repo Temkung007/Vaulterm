@@ -42,6 +42,7 @@ pub fn run() {
             commands::list_connections,
             commands::save_connection,
             commands::delete_connection,
+            commands::reorder_connections,
             commands::list_snippets,
             commands::save_snippet,
             commands::delete_snippet,

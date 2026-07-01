@@ -72,11 +72,15 @@ body {
 }
 
 .sidebar__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 0 14px 10px;
 }
 
 .sidebar__search input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
@@ -87,6 +91,13 @@ body {
 }
 .sidebar__search input:focus {
   border-color: var(--accent);
+}
+#fav-filter {
+  flex-shrink: 0;
+  font-size: 15px;
+}
+#fav-filter.active {
+  color: var(--warn);
 }
 
 .conn-list {
@@ -100,11 +111,90 @@ body {
 .conn-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 9px 10px;
+  border-left: 3px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
   position: relative;
+}
+.conn-item.has-color {
+  border-left-color: var(--accent-color);
+}
+.conn-item.dragging {
+  opacity: 0.4;
+}
+.conn-item.drop-target {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.conn-item__star {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 1px;
+  flex-shrink: 0;
+}
+.conn-item__star:hover,
+.conn-item__star.on {
+  color: var(--warn);
+}
+
+/* group headers */
+.conn-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 10px 4px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.conn-group:hover {
+  color: var(--text);
+}
+.conn-group__caret {
+  font-size: 9px;
+  width: 10px;
+}
+.conn-group__name {
+  flex: 1;
+  font-weight: 600;
+}
+.conn-group__count {
+  color: var(--text-faint);
+}
+
+/* color swatches in the connection modal */
+.color-swatches {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.color-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  cursor: pointer;
+  padding: 0;
+  background: transparent;
+}
+.color-swatch.selected {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.color-swatch--none {
+  color: var(--text-faint);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .conn-item:hover {
   background: var(--bg-elev-2);

@@ -57,6 +57,13 @@ export interface Connection {
   authType: AuthType;
   /** Path to a private key file (auth = "key"). */
   keyPath?: string | null;
+  /** Folder/group name (optional). */
+  group?: string | null;
+  favorite?: boolean;
+  /** Accent color (hex) shown in the sidebar. */
+  color?: string | null;
+  /** Commands typed into the shell right after connecting. */
+  startupCommands?: string | null;
 }
 
 // ---- Connection CRUD --------------------------------------------------------
@@ -81,6 +88,11 @@ export function saveConnection(
 
 export function deleteConnection(id: string): Promise<void> {
   return invoke("delete_connection", { id });
+}
+
+/** Persist a new order for the connection list. */
+export function reorderConnections(order: string[]): Promise<void> {
+  return invoke("reorder_connections", { order });
 }
 
 // ---- Custom snippets --------------------------------------------------------

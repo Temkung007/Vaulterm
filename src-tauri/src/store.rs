@@ -28,6 +28,16 @@ pub struct Connection {
     pub auth_type: AuthType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_path: Option<String>,
+    // --- organization (non-secret) ---
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub favorite: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Commands to type into the shell right after connecting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_commands: Option<String>,
     /// Password or key passphrase. Never sent to the frontend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
@@ -93,6 +103,10 @@ mod tests {
             username: "root".into(),
             auth_type: auth,
             key_path: key_path.map(Into::into),
+            group: None,
+            favorite: false,
+            color: None,
+            startup_commands: None,
             secret: Some("hunter2".into()),
             key_text: None,
         }

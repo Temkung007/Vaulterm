@@ -111,6 +111,7 @@ export class TerminalSession {
       await attempt(false);
       this.setStatus("connected");
       this.term.focus();
+      this.runStartupCommands();
     } catch (e) {
       if (api.isHostKeyMismatch(e)) {
         this.term.writeln(`\r\n\x1b[31m⚠ HOST KEY CHANGED for ${e.host}:${e.port}\x1b[0m`);
@@ -127,6 +128,7 @@ export class TerminalSession {
             await attempt(true);
             this.setStatus("connected");
             this.term.focus();
+            this.runStartupCommands();
           } catch (retryErr) {
             this.term.writeln(`\r\n\x1b[31m✖ ${formatError(retryErr)}\x1b[0m`);
             this.setStatus("closed");
@@ -162,6 +164,20 @@ export class TerminalSession {
   sendText(text: string): void {
     api.sshWrite(this.sessionId, bytesToB64(encoder.encode(text))).catch(() => {});
     this.term.focus();
+  }
+
+  /** Run the connection's startup commands once the shell is ready. */
+  private runStartupCommands(): void {
+    const cmds = this.connection.startupCommands?.trim();
+    if (!cmds) return;
+    const text =
+      cmds
+        .split(/\r?\n/)
+        .map((l) => l.trimEnd())
+        .filter(Boolean)
+        .join("\n") + "\n";
+    // Let the shell draw its first prompt before sending.
+    setTimeout(() => this.sendText(text), 400);
   }
 
   dispose(): void {

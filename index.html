@@ -17,6 +17,7 @@
         </header>
         <div class="sidebar__search">
           <input id="search" type="text" placeholder="Search connections…" autocomplete="off" />
+          <button id="fav-filter" class="icon-btn" title="Show favorites only">☆</button>
         </div>
         <ul id="conn-list" class="conn-list"></ul>
         <footer class="sidebar__footer">
@@ -140,6 +141,28 @@
           <label class="form__row auth-field auth-key auth-keytext">
             <span>Key passphrase <em>(optional)</em></span>
             <input id="f-passphrase" type="password" placeholder="leave empty if none" autocomplete="off" />
+          </label>
+
+          <label class="form__row">
+            <span>Folder <em>(optional)</em></span>
+            <input id="f-group" type="text" placeholder="e.g. Production" autocomplete="off" list="group-list" />
+          </label>
+          <datalist id="group-list"></datalist>
+
+          <div class="form__row">
+            <span>Color</span>
+            <div id="f-colors" class="color-swatches"></div>
+          </div>
+
+          <label class="form__row">
+            <span>Run on connect <em>(optional — one command per line)</em></span>
+            <textarea
+              id="f-startup"
+              class="key-textarea"
+              rows="2"
+              spellcheck="false"
+              placeholder="cd /var/www&#10;tmux attach || tmux new"
+            ></textarea>
           </label>
 
           <p id="form-error" class="form__error hidden"></p>

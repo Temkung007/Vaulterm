@@ -274,6 +274,10 @@ mod tests {
             username: "root".into(),
             auth_type: AuthType::Password,
             key_path: None,
+            group: None,
+            favorite: false,
+            color: None,
+            startup_commands: None,
             secret: Some("s3cr3t-password".into()),
             key_text: None,
         });

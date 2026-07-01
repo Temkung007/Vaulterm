@@ -3,6 +3,7 @@
 //! All data commands go through the encrypted vault and fail while it is
 //! locked; the frontend gates the UI behind the lock screen accordingly.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -148,6 +149,21 @@ pub fn delete_connection(state: State<'_, AppState>, id: String) -> Result<(), S
     state
         .vault
         .write(|d| d.connections.retain(|c| c.id != id))
+        .map_err(|e| e.to_string())
+}
+
+/// Persist a new order for the connection list (ids not in `order` keep their
+/// relative order at the end).
+#[tauri::command]
+pub fn reorder_connections(state: State<'_, AppState>, order: Vec<String>) -> Result<(), String> {
+    state
+        .vault
+        .write(|d| {
+            let idx: HashMap<&str, usize> =
+                order.iter().enumerate().map(|(i, id)| (id.as_str(), i)).collect();
+            d.connections
+                .sort_by_key(|c| idx.get(c.id.as_str()).copied().unwrap_or(usize::MAX));
+        })
         .map_err(|e| e.to_string())
 }
 
