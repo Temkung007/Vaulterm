@@ -2,7 +2,7 @@ import "./styles.css";
 import * as api from "./api";
 import type { Connection } from "./api";
 import { ConnectionModal, connectionSubtitle, type SavePayload } from "./connections";
-import { TerminalSession, type SessionStatus } from "./terminal";
+import { TerminalSession, type SessionStatus, TERMINAL_THEMES, DEFAULT_THEME } from "./terminal";
 import { CommandPalette } from "./snippets";
 import { FilesBrowser } from "./files";
 import { DashboardPanel } from "./dashboard";
@@ -41,6 +41,8 @@ const setMsgEl = $<HTMLParagraphElement>("set-msg");
 const cpCurrentEl = $<HTMLInputElement>("cp-current");
 const cpNewEl = $<HTMLInputElement>("cp-new");
 const cpNew2El = $<HTMLInputElement>("cp-new2");
+const setFontSizeEl = $<HTMLInputElement>("set-fontsize");
+const setTermThemeEl = $<HTMLSelectElement>("set-termtheme");
 
 // ---- App state --------------------------------------------------------------
 
@@ -67,6 +69,8 @@ function loadCollapsedGroups(): string[] {
   }
 }
 const collapsedGroups = new Set<string>(loadCollapsedGroups());
+let termFontSize = Number(localStorage.getItem("vaulterm.fontSize")) || 14;
+let termTheme = localStorage.getItem("vaulterm.termTheme") || DEFAULT_THEME;
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -270,7 +274,11 @@ async function handleReorderDrop(targetId: string): Promise<void> {
 
 async function openSession(conn: Connection): Promise<void> {
   const sessionId = crypto.randomUUID();
-  const session = new TerminalSession(conn, sessionId);
+  const session = new TerminalSession(conn, sessionId, {
+    fontSize: termFontSize,
+    themeName: termTheme,
+    onZoom: handleZoom,
+  });
 
   const tabEl = el("div", "tab connecting");
   tabEl.dataset.sid = sessionId;
@@ -453,6 +461,20 @@ function applyAutoLock(minutes: number): void {
   resetIdleTimer();
 }
 
+function handleZoom(delta: number | "reset"): void {
+  termFontSize = delta === "reset" ? 14 : Math.min(30, Math.max(8, termFontSize + delta));
+  localStorage.setItem("vaulterm.fontSize", String(termFontSize));
+  applyTermPrefs();
+  setFontSizeEl.value = String(termFontSize);
+}
+
+function applyTermPrefs(): void {
+  for (const { session } of sessions.values()) {
+    session.setFontSize(termFontSize);
+    session.setTheme(termTheme);
+  }
+}
+
 function setSettingsMsg(msg: string, ok: boolean): void {
   setMsgEl.textContent = msg;
   setMsgEl.classList.remove("hidden");
@@ -471,6 +493,8 @@ function openSettings(): void {
   cpCurrentEl.value = "";
   cpNewEl.value = "";
   cpNew2El.value = "";
+  setFontSizeEl.value = String(termFontSize);
+  setTermThemeEl.value = termTheme;
   settingsBackdropEl.classList.remove("hidden");
 }
 
@@ -562,6 +586,27 @@ function bindUi(): void {
   $("cp-change").addEventListener("click", () => void handleChangePassword());
   $("vault-export").addEventListener("click", () => void handleExportVault());
   $("vault-import").addEventListener("click", () => void handleImportVault());
+  setTermThemeEl.replaceChildren(
+    ...Object.keys(TERMINAL_THEMES).map((n) => {
+      const o = document.createElement("option");
+      o.value = n;
+      o.textContent = n;
+      return o;
+    }),
+  );
+  setFontSizeEl.addEventListener("change", () => {
+    const n = Number(setFontSizeEl.value);
+    if (Number.isInteger(n) && n >= 8 && n <= 30) {
+      termFontSize = n;
+      localStorage.setItem("vaulterm.fontSize", String(n));
+      applyTermPrefs();
+    }
+  });
+  setTermThemeEl.addEventListener("change", () => {
+    termTheme = setTermThemeEl.value;
+    localStorage.setItem("vaulterm.termTheme", termTheme);
+    applyTermPrefs();
+  });
   settingsBackdropEl.addEventListener("mousedown", (e) => {
     if (e.target === settingsBackdropEl) closeSettings();
   });

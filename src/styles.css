@@ -369,6 +369,59 @@ body {
   height: 100%;
 }
 
+/* in-terminal search bar */
+.term-search {
+  position: absolute;
+  top: 10px;
+  right: 18px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+.term-search.hidden {
+  display: none;
+}
+.term-search__input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 13px;
+  outline: none;
+  width: 160px;
+}
+.term-search__input:focus {
+  border-color: var(--accent);
+}
+.term-search__count {
+  font-size: 11px;
+  color: var(--text-faint);
+  min-width: 34px;
+  text-align: center;
+  font-family: var(--mono);
+}
+.term-search__btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1;
+}
+.term-search__btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
 /* ---------- Empty state ---------- */
 .empty-state {
   position: absolute;
