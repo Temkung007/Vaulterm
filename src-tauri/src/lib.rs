@@ -8,6 +8,7 @@ mod vault;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use tauri::Manager;
 use tokio::sync::mpsc::UnboundedSender;
 
 use sftp::SftpConn;
@@ -70,6 +71,20 @@ pub fn run() {
             commands::tunnel_list,
             commands::tunnel_stop_all,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Best-effort teardown of live tunnels when the app exits: abort each
+            // accept loop and drop its SSH handle, which closes the session and
+            // releases any server-side -R forward.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Some(state) = app_handle.try_state::<AppState>() {
+                    let drained: Vec<Tunnel> =
+                        state.tunnels.lock().unwrap().drain().map(|(_, t)| t).collect();
+                    for t in &drained {
+                        t.abort();
+                    }
+                }
+            }
+        });
 }

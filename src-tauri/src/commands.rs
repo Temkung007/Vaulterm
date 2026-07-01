@@ -551,7 +551,12 @@ pub async fn tunnel_start(
             let assigned = handle
                 .tcpip_forward("127.0.0.1".to_string(), bind_port as u32)
                 .await
-                .map_err(|e| format!("remote forward request failed — {e}"))? as u16;
+                .map_err(|e| {
+                    format!(
+                        "server refused to listen on port {bind_port} \
+                         (already in use, privileged <1024, or remote forwarding disabled) — {e}"
+                    )
+                })? as u16;
             let bound = if bind_port == 0 { assigned } else { bind_port };
             (tokio::spawn(std::future::pending::<()>()), bound)
         }

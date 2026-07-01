@@ -48,6 +48,10 @@ pub(crate) enum SshConnectError {
     Other(String),
 }
 
+/// Cap on simultaneous inbound (-R) forwarded connections per tunnel, so a
+/// compromised server can't flood the local target with unbounded connections.
+const MAX_FORWARDED_CONNS: usize = 64;
+
 /// russh client handler implementing trust-on-first-use host-key verification.
 pub(crate) struct ClientHandler {
     host: String,
@@ -60,6 +64,8 @@ pub(crate) struct ClientHandler {
     /// For a remote (-R) forward: where to send inbound forwarded connections
     /// on the local side. `None` for ordinary sessions.
     forward_to: Option<(String, u16)>,
+    /// Bounds concurrent inbound (-R) forwarded connections. `None` otherwise.
+    forward_sem: Option<Arc<tokio::sync::Semaphore>>,
 }
 
 impl Handler for ClientHandler {
@@ -104,7 +110,17 @@ impl Handler for ClientHandler {
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
         if let Some((host, port)) = self.forward_to.clone() {
+            // Hold a permit for the connection's lifetime; drop the inbound
+            // channel if we're already at the concurrency cap.
+            let permit = match &self.forward_sem {
+                Some(sem) => match sem.clone().try_acquire_owned() {
+                    Ok(p) => Some(p),
+                    Err(_) => return Ok(()),
+                },
+                None => None,
+            };
             tokio::spawn(async move {
+                let _permit = permit;
                 if let Ok(mut tcp) = tokio::net::TcpStream::connect((host.as_str(), port)).await {
                     let mut stream = channel.into_stream();
                     let _ = tokio::io::copy_bidirectional(&mut stream, &mut tcp).await;
@@ -145,13 +161,17 @@ pub(crate) async fn connect_chain(
 
     for (i, hop) in hops.iter().enumerate() {
         let outcome = Arc::new(Mutex::new(HostKeyOutcome::Pending));
+        let ft = if i == last { forward_to.clone() } else { None };
         let handler = ClientHandler {
             host: hop.conn.host.clone(),
             port: hop.conn.port,
             known: known.clone(),
             trust_override,
             outcome: outcome.clone(),
-            forward_to: if i == last { forward_to.clone() } else { None },
+            forward_sem: ft
+                .as_ref()
+                .map(|_| Arc::new(tokio::sync::Semaphore::new(MAX_FORWARDED_CONNS))),
+            forward_to: ft,
         };
 
         // First hop uses a real TcpStream; later hops tunnel through the
