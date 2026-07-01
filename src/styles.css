@@ -989,6 +989,62 @@ body {
   color: var(--success);
 }
 
+/* ---------- Server dashboard ---------- */
+.modal.dash {
+  width: 560px;
+}
+.dash__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.dash__head .modal__title {
+  margin: 0;
+}
+.dash__head-actions {
+  display: flex;
+  gap: 6px;
+}
+.dash__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.dash-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  min-width: 0;
+}
+.dash-card__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 4px;
+}
+.dash-card__value {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-word;
+}
+.dash__status {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+  min-height: 18px;
+}
+.dash__status.error {
+  color: var(--danger);
+}
+
 /* scrollbars */
 ::-webkit-scrollbar {
   width: 10px;

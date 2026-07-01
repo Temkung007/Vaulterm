@@ -199,6 +199,11 @@ export function sftpDelete(connectionId: string, path: string, isDir: boolean): 
   return invoke("sftp_delete", { connectionId, path, isDir });
 }
 
+/** Run a one-shot command over SSH (exec) and return its stdout. */
+export function sshRun(connectionId: string, command: string): Promise<string> {
+  return invoke("ssh_run", { connectionId, command });
+}
+
 // ---- Vault backup / restore -------------------------------------------------
 
 export function vaultExport(destPath: string): Promise<void> {

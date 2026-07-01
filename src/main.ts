@@ -5,6 +5,7 @@ import { ConnectionModal, connectionSubtitle, type SavePayload } from "./connect
 import { TerminalSession, type SessionStatus } from "./terminal";
 import { CommandPalette } from "./snippets";
 import { FilesBrowser } from "./files";
+import { DashboardPanel } from "./dashboard";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 // ---- DOM refs ---------------------------------------------------------------
@@ -116,6 +117,12 @@ function buildConnItem(conn: Connection): HTMLLIElement {
   body.append(el("div", "conn-item__sub", connectionSubtitle(conn)));
 
   const actions = el("div", "conn-item__actions");
+  const dashBtn = el("button", "icon-btn", "📊");
+  dashBtn.title = "Server status";
+  dashBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void dashboard.open(conn);
+  });
   const filesBtn = el("button", "icon-btn", "📁");
   filesBtn.title = "Browse files";
   filesBtn.addEventListener("click", (e) => {
@@ -134,7 +141,7 @@ function buildConnItem(conn: Connection): HTMLLIElement {
     e.stopPropagation();
     void removeConnection(conn);
   });
-  actions.append(filesBtn, editBtn, delBtn);
+  actions.append(dashBtn, filesBtn, editBtn, delBtn);
 
   item.append(dot, star, body, actions);
   item.addEventListener("click", () => void openSession(conn));
@@ -342,6 +349,7 @@ const palette = new CommandPalette((command) => {
 });
 
 const filesBrowser = new FilesBrowser();
+const dashboard = new DashboardPanel();
 
 async function removeConnection(conn: Connection): Promise<void> {
   const ok = confirm(`Delete "${conn.name || connectionSubtitle(conn)}"?\nThis also removes its saved password.`);
@@ -416,8 +424,9 @@ async function handleLockSubmit(e: SubmitEvent): Promise<void> {
 }
 
 async function lockApp(): Promise<void> {
-  // Tear down the file browser + live sessions before the key is wiped.
+  // Tear down overlays + live sessions before the key is wiped.
   filesBrowser.hideForLock();
+  dashboard.hideForLock();
   for (const sid of [...sessions.keys()]) closeSession(sid);
   try {
     await api.vaultLock();

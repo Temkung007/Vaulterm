@@ -60,6 +60,7 @@ pub fn run() {
             commands::sftp_rename,
             commands::sftp_delete,
             commands::sftp_close,
+            commands::ssh_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

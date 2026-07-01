@@ -452,3 +452,30 @@ pub async fn sftp_delete(
 pub fn sftp_close(state: State<'_, AppState>, connection_id: String) {
     state.sftp_conns.lock().unwrap().remove(&connection_id);
 }
+
+// ---------------------------------------------------------------------------
+// Server dashboard (one-shot exec)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn ssh_run(
+    state: State<'_, AppState>,
+    connection_id: String,
+    command: String,
+) -> Result<String, String> {
+    let conn = state
+        .vault
+        .read(|d| d.connections.iter().find(|c| c.id == connection_id).cloned())
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "connection not found".to_string())?;
+    let known = state.vault.read(|d| d.known_hosts.clone()).map_err(|e| e.to_string())?;
+
+    ssh::run_exec(&conn, conn.secret.clone(), conn.key_text.clone(), known, &command)
+        .await
+        .map_err(|e| match e {
+            SshConnectError::HostKeyMismatch { host, port, .. } => {
+                format!("host key for {host}:{port} changed — open a terminal to it first")
+            }
+            SshConnectError::Other(m) => m,
+        })
+}

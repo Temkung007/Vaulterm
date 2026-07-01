@@ -221,6 +221,37 @@ async fn authenticate(
     Ok(())
 }
 
+/// Open a one-shot connection, run `command` via exec, and return its stdout.
+/// Used by the server dashboard (read-only status commands).
+pub(crate) async fn run_exec(
+    conn: &Connection,
+    secret: Option<String>,
+    key_material: Option<String>,
+    known: Vec<KnownHost>,
+    command: &str,
+) -> Result<String, SshConnectError> {
+    let (handle, _new) =
+        connect_authenticated(conn, secret, key_material, known, false).await?;
+    let mut channel = handle
+        .channel_open_session()
+        .await
+        .map_err(|e| SshConnectError::Other(format!("{e}")))?;
+    channel
+        .exec(true, command.as_bytes())
+        .await
+        .map_err(|e| SshConnectError::Other(format!("{e}")))?;
+
+    let mut out: Vec<u8> = Vec::new();
+    while let Some(msg) = channel.wait().await {
+        match msg {
+            ChannelMsg::Data { data } => out.extend_from_slice(&data),
+            ChannelMsg::Eof | ChannelMsg::Close => break,
+            _ => {}
+        }
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
 async fn open_shell(handle: &mut Handle<ClientHandler>, cols: u32, rows: u32) -> anyhow::Result<Channel<Msg>> {
     let channel = handle.channel_open_session().await?;
     channel
