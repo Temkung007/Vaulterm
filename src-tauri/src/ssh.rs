@@ -95,80 +95,116 @@ impl Handler for ClientHandler {
 ///
 /// On success returns the handle, channel, and `Some(KnownHost)` if this was a
 /// first-seen (or explicitly trusted) key the caller should persist.
-/// Connect + verify host key + authenticate, returning the live handle and any
-/// first-seen/trusted key the caller should persist. Shared by the terminal
-/// (which then opens a shell) and SFTP (which opens the sftp subsystem).
-pub(crate) async fn connect_authenticated(
-    conn: &Connection,
-    secret: Option<String>,
-    key_material: Option<String>,
+/// One hop in a connection chain — jump hosts first, the target last.
+pub(crate) struct Hop {
+    pub conn: Connection,
+    pub secret: Option<String>,
+    pub key_material: Option<String>,
+}
+
+/// Connect through the chain (jump hosts, then target), authenticating each
+/// hop. Returns the target handle, the intermediate jump handles (which MUST be
+/// kept alive to hold the tunnels open), and any first-seen keys to persist.
+pub(crate) async fn connect_chain(
+    hops: Vec<Hop>,
     known: Vec<KnownHost>,
     trust_override: bool,
-) -> Result<(Handle<ClientHandler>, Option<KnownHost>), SshConnectError> {
+) -> Result<(Handle<ClientHandler>, Vec<Handle<ClientHandler>>, Vec<KnownHost>), SshConnectError> {
     let config = Arc::new(Config {
         inactivity_timeout: Some(Duration::from_secs(3600)),
         ..Default::default()
     });
-    let outcome = Arc::new(Mutex::new(HostKeyOutcome::Pending));
-    let handler = ClientHandler {
-        host: conn.host.clone(),
-        port: conn.port,
-        known,
-        trust_override,
-        outcome: outcome.clone(),
-    };
+    let mut handles: Vec<Handle<ClientHandler>> = Vec::new();
+    let mut new_hosts: Vec<KnownHost> = Vec::new();
 
-    let mut handle = match client::connect(config, (conn.host.as_str(), conn.port), handler).await {
-        Ok(h) => h,
-        Err(e) => {
-            if let HostKeyOutcome::Mismatch { expected, got } = outcome.lock().unwrap().clone() {
-                return Err(SshConnectError::HostKeyMismatch {
-                    host: conn.host.clone(),
-                    port: conn.port,
-                    expected,
-                    got,
-                });
+    for (i, hop) in hops.iter().enumerate() {
+        let outcome = Arc::new(Mutex::new(HostKeyOutcome::Pending));
+        let handler = ClientHandler {
+            host: hop.conn.host.clone(),
+            port: hop.conn.port,
+            known: known.clone(),
+            trust_override,
+            outcome: outcome.clone(),
+        };
+
+        // First hop uses a real TcpStream; later hops tunnel through the
+        // previous handle via a direct-tcpip channel.
+        let connect_result = if i == 0 {
+            client::connect(config.clone(), (hop.conn.host.as_str(), hop.conn.port), handler).await
+        } else {
+            let channel = handles
+                .last()
+                .expect("previous hop")
+                .channel_open_direct_tcpip(
+                    hop.conn.host.clone(),
+                    hop.conn.port as u32,
+                    "127.0.0.1".to_string(),
+                    0u32,
+                )
+                .await
+                .map_err(|e| {
+                    SshConnectError::Other(format!(
+                        "opening tunnel to {}:{} via jump host — {e}",
+                        hop.conn.host, hop.conn.port
+                    ))
+                })?;
+            client::connect_stream(config.clone(), channel.into_stream(), handler).await
+        };
+
+        let mut handle = match connect_result {
+            Ok(h) => h,
+            Err(e) => {
+                if let HostKeyOutcome::Mismatch { expected, got } = outcome.lock().unwrap().clone() {
+                    return Err(SshConnectError::HostKeyMismatch {
+                        host: hop.conn.host.clone(),
+                        port: hop.conn.port,
+                        expected,
+                        got,
+                    });
+                }
+                return Err(SshConnectError::Other(format!(
+                    "could not connect to {}:{} — {e}",
+                    hop.conn.host, hop.conn.port
+                )));
             }
-            return Err(SshConnectError::Other(format!(
-                "could not connect to {}:{} — {e}",
-                conn.host, conn.port
-            )));
+        };
+
+        authenticate(&mut handle, &hop.conn, hop.secret.clone(), hop.key_material.clone())
+            .await
+            .map_err(|e| SshConnectError::Other(format!("{e:#}")))?;
+
+        if let HostKeyOutcome::FirstSeen { fingerprint, algo } = outcome.lock().unwrap().clone() {
+            new_hosts.push(KnownHost {
+                host: hop.conn.host.clone(),
+                port: hop.conn.port,
+                fingerprint,
+                algo,
+            });
         }
-    };
 
-    authenticate(&mut handle, conn, secret, key_material)
-        .await
-        .map_err(|e| SshConnectError::Other(format!("{e:#}")))?;
+        handles.push(handle);
+    }
 
-    let new_host = match outcome.lock().unwrap().clone() {
-        HostKeyOutcome::FirstSeen { fingerprint, algo } => Some(KnownHost {
-            host: conn.host.clone(),
-            port: conn.port,
-            fingerprint,
-            algo,
-        }),
-        _ => None,
-    };
-
-    Ok((handle, new_host))
+    let target = handles.pop().expect("chain has at least one hop");
+    Ok((target, handles, new_hosts))
 }
 
-/// Connect and open an interactive shell with a PTY (for a terminal tab).
+/// Connect (through any jump hosts) and open an interactive shell with a PTY.
 pub(crate) async fn connect(
-    conn: &Connection,
-    secret: Option<String>,
-    key_material: Option<String>,
+    hops: Vec<Hop>,
     known: Vec<KnownHost>,
     trust_override: bool,
     cols: u32,
     rows: u32,
-) -> Result<(Handle<ClientHandler>, Channel<Msg>, Option<KnownHost>), SshConnectError> {
-    let (mut handle, new_host) =
-        connect_authenticated(conn, secret, key_material, known, trust_override).await?;
-    let channel = open_shell(&mut handle, cols, rows)
+) -> Result<
+    (Handle<ClientHandler>, Channel<Msg>, Vec<Handle<ClientHandler>>, Vec<KnownHost>),
+    SshConnectError,
+> {
+    let (mut target, jumps, new_hosts) = connect_chain(hops, known, trust_override).await?;
+    let channel = open_shell(&mut target, cols, rows)
         .await
         .map_err(|e| SshConnectError::Other(format!("{e:#}")))?;
-    Ok((handle, channel, new_host))
+    Ok((target, channel, jumps, new_hosts))
 }
 
 async fn authenticate(
@@ -224,14 +260,13 @@ async fn authenticate(
 /// Open a one-shot connection, run `command` via exec, and return its stdout.
 /// Used by the server dashboard (read-only status commands).
 pub(crate) async fn run_exec(
-    conn: &Connection,
-    secret: Option<String>,
-    key_material: Option<String>,
+    hops: Vec<Hop>,
     known: Vec<KnownHost>,
     command: &str,
 ) -> Result<String, SshConnectError> {
-    let (handle, _new) =
-        connect_authenticated(conn, secret, key_material, known, false).await?;
+    // `_jump` and `handle` stay owned until end of scope, keeping the tunnels
+    // and target session alive for the whole exec.
+    let (handle, _jump, _new) = connect_chain(hops, known, false).await?;
     let mut channel = handle
         .channel_open_session()
         .await
@@ -266,11 +301,13 @@ pub(crate) async fn pump(
     app: AppHandle,
     session_id: String,
     handle: Handle<ClientHandler>,
+    jump: Vec<Handle<ClientHandler>>,
     mut channel: Channel<Msg>,
     mut input: UnboundedReceiver<SessionInput>,
     output: IpcChannel<String>,
 ) {
     let _handle = handle; // keep the connection alive
+    let _jump = jump; // keep jump-host tunnels alive
 
     loop {
         tokio::select! {

@@ -274,6 +274,7 @@ mod tests {
             username: "root".into(),
             auth_type: AuthType::Password,
             key_path: None,
+            jump: None,
             group: None,
             favorite: false,
             color: None,

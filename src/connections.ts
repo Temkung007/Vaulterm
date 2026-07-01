@@ -46,12 +46,35 @@ export class ConnectionModal {
   private fGroup = $<HTMLInputElement>("f-group");
   private fStartup = $<HTMLTextAreaElement>("f-startup");
   private fColorsEl = $<HTMLDivElement>("f-colors");
+  private fJump = $<HTMLSelectElement>("f-jump");
 
   // Captured here so we can restore it after edit mode swaps the placeholder.
   private keyPlaceholder = this.fKeyText.placeholder;
   private editing = false;
   private selectedColor = "";
   private currentFavorite = false;
+  private allConnections: Connection[] = [];
+
+  /** Provide the full connection list so the jump-host dropdown can be built. */
+  setConnections(list: Connection[]): void {
+    this.allConnections = list;
+  }
+
+  private populateJumpOptions(currentId: string, selected: string): void {
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "— None (direct) —";
+    const opts = [none];
+    for (const c of this.allConnections) {
+      if (c.id === currentId) continue;
+      const o = document.createElement("option");
+      o.value = c.id;
+      o.textContent = `${c.name || c.host} (${connectionSubtitle(c)})`;
+      opts.push(o);
+    }
+    this.fJump.replaceChildren(...opts);
+    this.fJump.value = selected;
+  }
 
   constructor(private onSave: (payload: SavePayload) => void | Promise<void>) {
     this.fAuth.addEventListener("change", () => this.syncAuthFields());
@@ -107,6 +130,7 @@ export class ConnectionModal {
     this.selectedColor = "";
     this.currentFavorite = false;
     this.updateColorSelection();
+    this.populateJumpOptions("", "");
     this.syncAuthFields();
     this.show();
     this.fName.focus();
@@ -134,6 +158,7 @@ export class ConnectionModal {
     this.selectedColor = c.color ?? "";
     this.currentFavorite = c.favorite ?? false;
     this.updateColorSelection();
+    this.populateJumpOptions(c.id, c.jump ?? "");
     this.syncAuthFields();
     this.show();
     this.fName.focus();
@@ -211,6 +236,7 @@ export class ConnectionModal {
       username: this.fUser.value.trim(),
       authType: auth,
       keyPath: auth === "key" ? this.fKeyPath.value.trim() : null,
+      jump: this.fJump.value || null,
       group: this.fGroup.value.trim() || null,
       favorite: this.currentFavorite,
       color: this.selectedColor || null,

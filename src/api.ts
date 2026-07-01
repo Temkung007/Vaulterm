@@ -57,6 +57,8 @@ export interface Connection {
   authType: AuthType;
   /** Path to a private key file (auth = "key"). */
   keyPath?: string | null;
+  /** Connection id of a jump host to route through (ProxyJump). */
+  jump?: string | null;
   /** Folder/group name (optional). */
   group?: string | null;
   favorite?: boolean;

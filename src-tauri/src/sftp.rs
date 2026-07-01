@@ -10,15 +10,17 @@ use russh_sftp::protocol::OpenFlags;
 use serde::Serialize;
 use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
 
-use crate::ssh::{self, ClientHandler, SshConnectError};
-use crate::store::{Connection, KnownHost};
+use crate::ssh::{self, ClientHandler, Hop, SshConnectError};
+use crate::store::KnownHost;
 
 /// Largest file we'll load into the in-app editor.
 const MAX_EDIT_BYTES: u64 = 2_000_000;
 
-/// One live SFTP connection. The `Handle` is kept alive for the session.
+/// One live SFTP connection. The handle (and any jump-host handles) are kept
+/// alive for the lifetime of the session.
 pub struct SftpConn {
     _handle: Handle<ClientHandler>,
+    _jump: Vec<Handle<ClientHandler>>,
     session: SftpSession,
 }
 
@@ -30,15 +32,10 @@ pub struct FileEntry {
     pub size: u64,
 }
 
-/// Open a new SFTP connection (authenticates + host-key check via `ssh`).
-pub async fn open(
-    conn: &Connection,
-    secret: Option<String>,
-    key_material: Option<String>,
-    known: Vec<KnownHost>,
-) -> Result<(SftpConn, Option<KnownHost>), SshConnectError> {
-    let (handle, new_host) =
-        ssh::connect_authenticated(conn, secret, key_material, known, false).await?;
+/// Open a new SFTP connection through the given chain (authenticates + host-key
+/// check via `ssh`). Returns the connection and any first-seen keys to persist.
+pub async fn open(hops: Vec<Hop>, known: Vec<KnownHost>) -> Result<(SftpConn, Vec<KnownHost>), SshConnectError> {
+    let (handle, jump, new_hosts) = ssh::connect_chain(hops, known, false).await?;
 
     let channel = handle
         .channel_open_session()
@@ -52,7 +49,7 @@ pub async fn open(
         .await
         .map_err(|e| SshConnectError::Other(format!("sftp handshake failed: {e}")))?;
 
-    Ok((SftpConn { _handle: handle, session }, new_host))
+    Ok((SftpConn { _handle: handle, _jump: jump, session }, new_hosts))
 }
 
 impl SftpConn {

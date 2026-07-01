@@ -3,7 +3,7 @@
 //! All data commands go through the encrypted vault and fail while it is
 //! locked; the frontend gates the UI behind the lock screen accordingly.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -14,9 +14,56 @@ use uuid::Uuid;
 
 use crate::sftp::{self, FileEntry, SftpConn};
 use crate::ssh::{self, SessionInput, SshConnectError};
-use crate::store::{Connection, Settings, Snippet};
+use crate::store::{Connection, KnownHost, Settings, Snippet};
 use crate::vault::Vault;
 use crate::AppState;
+
+/// Build the hop chain [jump…, target] for `target_id`, resolving each hop's
+/// secret from the vault; errors on a jump-host cycle.
+fn resolve_chain(vault: &Vault, target_id: &str) -> Result<Vec<ssh::Hop>, String> {
+    let conns = vault.read(|d| d.connections.clone()).map_err(|e| e.to_string())?;
+    let mut chain: Vec<Connection> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut cur = target_id.to_string();
+    loop {
+        if !seen.insert(cur.clone()) {
+            return Err("jump host loops back on itself".into());
+        }
+        let c = conns
+            .iter()
+            .find(|c| c.id == cur)
+            .ok_or_else(|| "connection not found".to_string())?
+            .clone();
+        let next = c.jump.clone().filter(|j| !j.is_empty());
+        chain.push(c);
+        match next {
+            Some(j) => cur = j,
+            None => break,
+        }
+    }
+    chain.reverse(); // first jump host … target
+    Ok(chain
+        .into_iter()
+        .map(|c| ssh::Hop {
+            secret: c.secret.clone(),
+            key_material: c.key_text.clone(),
+            conn: c,
+        })
+        .collect())
+}
+
+/// Persist any first-seen host keys (replacing an existing entry for host:port).
+fn store_known_hosts(vault: &Vault, new_hosts: Vec<KnownHost>) {
+    if new_hosts.is_empty() {
+        return;
+    }
+    let _ = vault.write(|d| {
+        for kh in new_hosts {
+            d.known_hosts.retain(|k| !(k.host == kh.host && k.port == kh.port));
+            d.known_hosts.push(kh);
+        }
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Vault lifecycle (master password)
@@ -243,33 +290,20 @@ pub async fn ssh_open(
     on_output: Channel<String>,
     trust_host_key: bool,
 ) -> Result<(), SshError> {
-    // Pull a full copy (with secrets) + the trusted host keys out of the vault,
-    // releasing the lock before the long-running connect.
-    let conn = state
-        .vault
-        .read(|d| d.connections.iter().find(|c| c.id == connection_id).cloned())
-        .map_err(|e| SshError::msg(e.to_string()))?
-        .ok_or_else(|| SshError::msg("connection not found"))?;
+    // Resolve the jump chain + trusted host keys, releasing the vault lock
+    // before the long-running connect.
+    let hops = resolve_chain(&state.vault, &connection_id).map_err(SshError::msg)?;
     let known = state
         .vault
         .read(|d| d.known_hosts.clone())
         .map_err(|e| SshError::msg(e.to_string()))?;
 
-    let secret = conn.secret.clone();
-    let key_material = conn.key_text.clone();
-
-    match ssh::connect(&conn, secret, key_material, known, trust_host_key, cols, rows).await {
-        Ok((handle, channel, new_host)) => {
-            if let Some(kh) = new_host {
-                // First-seen or explicitly trusted: persist (replacing any old key).
-                let _ = state.vault.write(|d| {
-                    d.known_hosts.retain(|k| !(k.host == kh.host && k.port == kh.port));
-                    d.known_hosts.push(kh);
-                });
-            }
+    match ssh::connect(hops, known, trust_host_key, cols, rows).await {
+        Ok((handle, channel, jump, new_hosts)) => {
+            store_known_hosts(&state.vault, new_hosts);
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<SessionInput>();
             state.sessions.lock().unwrap().insert(session_id.clone(), tx);
-            tauri::async_runtime::spawn(ssh::pump(app, session_id, handle, channel, rx, on_output));
+            tauri::async_runtime::spawn(ssh::pump(app, session_id, handle, jump, channel, rx, on_output));
             Ok(())
         }
         Err(SshConnectError::HostKeyMismatch { host, port, expected, got }) => {
@@ -321,14 +355,10 @@ async fn get_sftp(state: &AppState, connection_id: &str) -> Result<Arc<SftpConn>
         return Ok(conn);
     }
 
-    let conn = state
-        .vault
-        .read(|d| d.connections.iter().find(|c| c.id == connection_id).cloned())
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "connection not found".to_string())?;
+    let hops = resolve_chain(&state.vault, connection_id)?;
     let known = state.vault.read(|d| d.known_hosts.clone()).map_err(|e| e.to_string())?;
 
-    let (sftp_conn, new_host) = sftp::open(&conn, conn.secret.clone(), conn.key_text.clone(), known)
+    let (sftp_conn, new_hosts) = sftp::open(hops, known)
         .await
         .map_err(|e| match e {
             SshConnectError::HostKeyMismatch { host, port, .. } => format!(
@@ -336,12 +366,7 @@ async fn get_sftp(state: &AppState, connection_id: &str) -> Result<Arc<SftpConn>
             ),
             SshConnectError::Other(m) => m,
         })?;
-    if let Some(kh) = new_host {
-        let _ = state.vault.write(|d| {
-            d.known_hosts.retain(|k| !(k.host == kh.host && k.port == kh.port));
-            d.known_hosts.push(kh);
-        });
-    }
+    store_known_hosts(&state.vault, new_hosts);
 
     let arc = Arc::new(sftp_conn);
     state
@@ -463,19 +488,13 @@ pub async fn ssh_run(
     connection_id: String,
     command: String,
 ) -> Result<String, String> {
-    let conn = state
-        .vault
-        .read(|d| d.connections.iter().find(|c| c.id == connection_id).cloned())
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "connection not found".to_string())?;
+    let hops = resolve_chain(&state.vault, &connection_id)?;
     let known = state.vault.read(|d| d.known_hosts.clone()).map_err(|e| e.to_string())?;
 
-    ssh::run_exec(&conn, conn.secret.clone(), conn.key_text.clone(), known, &command)
-        .await
-        .map_err(|e| match e {
-            SshConnectError::HostKeyMismatch { host, port, .. } => {
-                format!("host key for {host}:{port} changed — open a terminal to it first")
-            }
-            SshConnectError::Other(m) => m,
-        })
+    ssh::run_exec(hops, known, &command).await.map_err(|e| match e {
+        SshConnectError::HostKeyMismatch { host, port, .. } => {
+            format!("host key for {host}:{port} changed — open a terminal to it first")
+        }
+        SshConnectError::Other(m) => m,
+    })
 }

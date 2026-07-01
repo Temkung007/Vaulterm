@@ -177,6 +177,7 @@ function buildConnItem(conn: Connection): HTMLLIElement {
 }
 
 function renderSidebar(): void {
+  modal.setConnections(connections);
   const filter = searchEl.value.trim().toLowerCase();
   const shown = connections.filter((c) => {
     if (favOnly && !c.favorite) return false;

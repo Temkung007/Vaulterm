@@ -28,6 +28,9 @@ pub struct Connection {
     pub auth_type: AuthType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_path: Option<String>,
+    /// Connection id of a jump host to route through (ProxyJump). None = direct.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jump: Option<String>,
     // --- organization (non-secret) ---
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
@@ -103,6 +106,7 @@ mod tests {
             username: "root".into(),
             auth_type: auth,
             key_path: key_path.map(Into::into),
+            jump: None,
             group: None,
             favorite: false,
             color: None,
