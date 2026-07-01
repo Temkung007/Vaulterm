@@ -224,19 +224,20 @@
             <select id="tun-kind">
               <option value="local">Local (-L) — reach a remote service locally</option>
               <option value="dynamic">Dynamic SOCKS (-D) — proxy through the server</option>
+              <option value="remote">Remote (-R) — expose a local service on the server</option>
             </select>
           </label>
           <label class="form__row">
-            <span>Local port</span>
+            <span id="tun-bind-label">Local port</span>
             <input id="tun-bind" type="number" min="1" max="65535" placeholder="8080" />
           </label>
           <div id="tun-local-fields">
             <label class="form__row">
-              <span>Destination host <em>(as seen from the server)</em></span>
+              <span id="tun-dhost-label">Destination host <em>(as seen from the server)</em></span>
               <input id="tun-dhost" type="text" placeholder="localhost / db.internal" />
             </label>
             <label class="form__row">
-              <span>Destination port</span>
+              <span id="tun-dport-label">Destination port</span>
               <input id="tun-dport" type="number" min="1" max="65535" placeholder="5432" />
             </label>
           </div>

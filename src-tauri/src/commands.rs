@@ -515,7 +515,14 @@ pub async fn tunnel_start(
 ) -> Result<TunnelInfo, String> {
     let hops = resolve_chain(&state.vault, &connection_id)?;
     let known = state.vault.read(|d| d.known_hosts.clone()).map_err(|e| e.to_string())?;
-    let (handle, jump, new_hosts) = ssh::connect_chain(hops, known, false)
+    // Remote (-R): the target session forwards inbound connections to
+    // dest_host:dest_port on this machine.
+    let forward_to = if kind == "remote" {
+        Some((dest_host.clone(), dest_port))
+    } else {
+        None
+    };
+    let (handle, jump, new_hosts) = ssh::connect_chain(hops, known, false, forward_to)
         .await
         .map_err(|e| match e {
             SshConnectError::HostKeyMismatch { host, port, .. } => {
@@ -528,22 +535,42 @@ pub async fn tunnel_start(
     // Shared across the accept loop + every per-connection piping task.
     let handle = Arc::new(handle);
 
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", bind_port))
-        .await
-        .map_err(|e| format!("cannot bind 127.0.0.1:{bind_port} — {e}"))?;
-    let bound = listener.local_addr().map(|a| a.port()).unwrap_or(bind_port);
-
-    let task = if kind == "dynamic" {
-        tokio::spawn(tunnel::run_dynamic_listener(listener, handle.clone()))
-    } else {
-        tokio::spawn(tunnel::run_local_listener(
-            listener,
-            handle.clone(),
-            dest_host.clone(),
-            dest_port,
-        ))
+    let bind_local = |bp: u16| async move {
+        tokio::net::TcpListener::bind(("127.0.0.1", bp))
+            .await
+            .map_err(|e| format!("cannot bind 127.0.0.1:{bp} — {e}"))
     };
 
+    let (task, bound) = match kind.as_str() {
+        "remote" => {
+            // Ask the server to listen; its inbound channels are piped by the
+            // session handler. A placeholder task holds the tunnel slot.
+            // russh returns the assigned port only when 0 (ephemeral) was
+            // requested — for a fixed port the reply is empty and it yields 0,
+            // so keep the port the user asked for.
+            let assigned = handle
+                .tcpip_forward("127.0.0.1".to_string(), bind_port as u32)
+                .await
+                .map_err(|e| format!("remote forward request failed — {e}"))? as u16;
+            let bound = if bind_port == 0 { assigned } else { bind_port };
+            (tokio::spawn(std::future::pending::<()>()), bound)
+        }
+        "dynamic" => {
+            let listener = bind_local(bind_port).await?;
+            let bound = listener.local_addr().map(|a| a.port()).unwrap_or(bind_port);
+            (tokio::spawn(tunnel::run_dynamic_listener(listener, handle.clone())), bound)
+        }
+        _ => {
+            let listener = bind_local(bind_port).await?;
+            let bound = listener.local_addr().map(|a| a.port()).unwrap_or(bind_port);
+            (
+                tokio::spawn(tunnel::run_local_listener(listener, handle.clone(), dest_host.clone(), dest_port)),
+                bound,
+            )
+        }
+    };
+
+    let remote_port = if kind == "remote" { Some(bound) } else { None };
     let id = Uuid::new_v4().to_string();
     let info = TunnelInfo {
         id: id.clone(),
@@ -557,15 +584,19 @@ pub async fn tunnel_start(
         .tunnels
         .lock()
         .unwrap()
-        .insert(id, Tunnel::new(info.clone(), task, handle, jump));
+        .insert(id, Tunnel::new(info.clone(), task, handle, jump, remote_port));
     Ok(info)
 }
 
 #[tauri::command]
-pub fn tunnel_stop(state: State<'_, AppState>, id: String) {
-    if let Some(t) = state.tunnels.lock().unwrap().remove(&id) {
+pub async fn tunnel_stop(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    // Take the tunnel out under the lock, then release it before awaiting.
+    let tunnel = state.tunnels.lock().unwrap().remove(&id);
+    if let Some(t) = tunnel {
         t.abort();
+        t.graceful_cancel().await;
     }
+    Ok(())
 }
 
 #[tauri::command]
@@ -580,9 +611,15 @@ pub fn tunnel_list(state: State<'_, AppState>) -> Vec<TunnelInfo> {
 }
 
 #[tauri::command]
-pub fn tunnel_stop_all(state: State<'_, AppState>) {
-    let mut map = state.tunnels.lock().unwrap();
-    for (_, t) in map.drain() {
+pub async fn tunnel_stop_all(state: State<'_, AppState>) -> Result<(), String> {
+    // Drain under the lock, then abort + cancel each outside it.
+    let drained: Vec<Tunnel> = {
+        let mut map = state.tunnels.lock().unwrap();
+        map.drain().map(|(_, t)| t).collect()
+    };
+    for t in drained {
         t.abort();
+        t.graceful_cancel().await;
     }
+    Ok(())
 }

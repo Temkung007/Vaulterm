@@ -211,16 +211,18 @@ export function sshRun(connectionId: string, command: string): Promise<string> {
 export interface TunnelInfo {
   id: string;
   connectionId: string;
-  /** "local" or "dynamic". */
+  /** "local", "dynamic", or "remote". */
   kind: string;
+  /** Listen port: on 127.0.0.1 for local/dynamic; on the server for remote. */
   bindPort: number;
+  /** Target host. Local: as seen from the server. Remote: on this machine. */
   destHost: string;
   destPort: number;
 }
 
 export function tunnelStart(
   connectionId: string,
-  kind: "local" | "dynamic",
+  kind: "local" | "dynamic" | "remote",
   bindPort: number,
   destHost: string,
   destPort: number,

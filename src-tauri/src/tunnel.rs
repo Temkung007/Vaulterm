@@ -5,8 +5,11 @@
 //!   SSH server) and pipes bytes.
 //! * Dynamic (-D): a local SOCKS5 proxy; each CONNECT request opens a
 //!   direct-tcpip channel to the requested destination.
+//! * Remote (-R): the server listens on `bind_port` and forwards inbound
+//!   connections back over the session; the connection Handler pipes each to
+//!   `dest_host:dest_port` on this machine (see `ssh::ClientHandler`).
 //!
-//! Both are client-initiated (no changes to the connection Handler needed).
+//! -L/-D are client-initiated (no Handler changes); -R needs the Handler.
 
 use std::sync::Arc;
 
@@ -22,12 +25,14 @@ use crate::ssh::ClientHandler;
 pub struct TunnelInfo {
     pub id: String,
     pub connection_id: String,
-    /// "local" or "dynamic".
+    /// "local", "dynamic", or "remote".
     pub kind: String,
+    /// Listen port: on 127.0.0.1 for local/dynamic; on the server for remote.
     pub bind_port: u16,
-    /// Target host (local forward only; empty for dynamic).
+    /// Target host. Local: as seen from the server. Remote: on this machine.
+    /// Empty for dynamic.
     pub dest_host: String,
-    /// Target port (local forward only; 0 for dynamic).
+    /// Target port (0 for dynamic).
     pub dest_port: u16,
 }
 
@@ -35,8 +40,11 @@ pub struct TunnelInfo {
 pub struct Tunnel {
     pub info: TunnelInfo,
     task: tokio::task::JoinHandle<()>,
-    _handle: Arc<Handle<ClientHandler>>,
+    handle: Arc<Handle<ClientHandler>>,
     _jump: Vec<Handle<ClientHandler>>,
+    /// Remote (-R) forwards: the server-side listen port, so stop can send an
+    /// explicit cancel-tcpip-forward. `None` for local/dynamic.
+    remote_port: Option<u16>,
 }
 
 impl Tunnel {
@@ -45,14 +53,27 @@ impl Tunnel {
         task: tokio::task::JoinHandle<()>,
         handle: Arc<Handle<ClientHandler>>,
         jump: Vec<Handle<ClientHandler>>,
+        remote_port: Option<u16>,
     ) -> Self {
-        Tunnel { info, task, _handle: handle, _jump: jump }
+        Tunnel { info, task, handle, _jump: jump, remote_port }
     }
 
     /// Stop accepting new connections. Existing piped connections finish on
     /// their own; the SSH connection closes when this Tunnel is dropped.
     pub fn abort(&self) {
         self.task.abort();
+    }
+
+    /// For a remote (-R) forward, ask the server to stop listening with an
+    /// in-band, acknowledged cancel-tcpip-forward before the SSH connection is
+    /// dropped. No-op (and no await cost) for local/dynamic forwards.
+    pub(crate) async fn graceful_cancel(&self) {
+        if let Some(port) = self.remote_port {
+            let _ = self
+                .handle
+                .cancel_tcpip_forward("127.0.0.1".to_string(), port as u32)
+                .await;
+        }
     }
 }
 

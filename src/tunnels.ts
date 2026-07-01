@@ -19,6 +19,9 @@ const el = <K extends keyof HTMLElementTagNameMap>(
 
 function tunnelLabel(t: TunnelInfo): string {
   if (t.kind === "dynamic") return `SOCKS proxy · 127.0.0.1:${t.bindPort}`;
+  if (t.kind === "remote") {
+    return `Remote · server:${t.bindPort} → ${t.destHost}:${t.destPort}`;
+  }
   return `Local · 127.0.0.1:${t.bindPort} → ${t.destHost}:${t.destPort}`;
 }
 
@@ -29,7 +32,10 @@ export class TunnelsPanel {
   private listEl = $<HTMLUListElement>("tun-list");
   private kindEl = $<HTMLSelectElement>("tun-kind");
   private bindEl = $<HTMLInputElement>("tun-bind");
+  private bindLabelEl = $<HTMLSpanElement>("tun-bind-label");
   private dhostEl = $<HTMLInputElement>("tun-dhost");
+  private dhostLabelEl = $<HTMLSpanElement>("tun-dhost-label");
+  private dportLabelEl = $<HTMLSpanElement>("tun-dport-label");
   private dportEl = $<HTMLInputElement>("tun-dport");
   private localFieldsEl = $<HTMLDivElement>("tun-local-fields");
   private msgEl = $<HTMLParagraphElement>("tun-msg");
@@ -63,7 +69,25 @@ export class TunnelsPanel {
   }
 
   private syncKind(): void {
-    this.localFieldsEl.style.display = this.kindEl.value === "local" ? "" : "none";
+    const kind = this.kindEl.value;
+    // Local + remote both need a destination; dynamic (SOCKS) does not.
+    this.localFieldsEl.style.display = kind === "dynamic" ? "none" : "";
+    if (kind === "remote") {
+      // -R: server listens on `bind`, forwards to a target on this machine.
+      this.bindLabelEl.textContent = "Server listen port";
+      this.dhostLabelEl.innerHTML = "Local target host <em>(on this machine)</em>";
+      this.dportLabelEl.textContent = "Local target port";
+      this.bindEl.placeholder = "9090";
+      this.dhostEl.placeholder = "127.0.0.1 / localhost";
+      this.dportEl.placeholder = "3000";
+    } else {
+      this.bindLabelEl.textContent = "Local port";
+      this.dhostLabelEl.innerHTML = "Destination host <em>(as seen from the server)</em>";
+      this.dportLabelEl.textContent = "Destination port";
+      this.bindEl.placeholder = "8080";
+      this.dhostEl.placeholder = "localhost / db.internal";
+      this.dportEl.placeholder = "5432";
+    }
   }
 
   private async refresh(): Promise<void> {
@@ -103,14 +127,16 @@ export class TunnelsPanel {
 
   private async start(): Promise<void> {
     if (!this.conn) return;
-    const kind = this.kindEl.value as "local" | "dynamic";
+    const kind = this.kindEl.value as "local" | "dynamic" | "remote";
     const bind = Number(this.bindEl.value);
     if (!Number.isInteger(bind) || bind < 1 || bind > 65535) {
-      return this.showMsg("Enter a local port (1–65535).");
+      return this.showMsg(
+        kind === "remote" ? "Enter a server listen port (1–65535)." : "Enter a local port (1–65535).",
+      );
     }
     let destHost = "";
     let destPort = 0;
-    if (kind === "local") {
+    if (kind !== "dynamic") {
       destHost = this.dhostEl.value.trim();
       destPort = Number(this.dportEl.value);
       if (!destHost) return this.showMsg("Enter a destination host.");

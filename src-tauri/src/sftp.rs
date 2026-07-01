@@ -35,7 +35,7 @@ pub struct FileEntry {
 /// Open a new SFTP connection through the given chain (authenticates + host-key
 /// check via `ssh`). Returns the connection and any first-seen keys to persist.
 pub async fn open(hops: Vec<Hop>, known: Vec<KnownHost>) -> Result<(SftpConn, Vec<KnownHost>), SshConnectError> {
-    let (handle, jump, new_hosts) = ssh::connect_chain(hops, known, false).await?;
+    let (handle, jump, new_hosts) = ssh::connect_chain(hops, known, false, None).await?;
 
     let channel = handle
         .channel_open_session()

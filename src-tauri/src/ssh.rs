@@ -57,6 +57,9 @@ pub(crate) struct ClientHandler {
     /// when the user explicitly trusts a changed key).
     trust_override: bool,
     outcome: Arc<Mutex<HostKeyOutcome>>,
+    /// For a remote (-R) forward: where to send inbound forwarded connections
+    /// on the local side. `None` for ordinary sessions.
+    forward_to: Option<(String, u16)>,
 }
 
 impl Handler for ClientHandler {
@@ -89,6 +92,27 @@ impl Handler for ClientHandler {
         *self.outcome.lock().unwrap() = outcome;
         Ok(accept)
     }
+
+    // Inbound channel for a remote (-R) forward: pipe it to the local target.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        _connected_address: &str,
+        _connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if let Some((host, port)) = self.forward_to.clone() {
+            tokio::spawn(async move {
+                if let Ok(mut tcp) = tokio::net::TcpStream::connect((host.as_str(), port)).await {
+                    let mut stream = channel.into_stream();
+                    let _ = tokio::io::copy_bidirectional(&mut stream, &mut tcp).await;
+                }
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Connect, verify the host key, authenticate, and open an interactive shell.
@@ -109,6 +133,7 @@ pub(crate) async fn connect_chain(
     hops: Vec<Hop>,
     known: Vec<KnownHost>,
     trust_override: bool,
+    forward_to: Option<(String, u16)>,
 ) -> Result<(Handle<ClientHandler>, Vec<Handle<ClientHandler>>, Vec<KnownHost>), SshConnectError> {
     let config = Arc::new(Config {
         inactivity_timeout: Some(Duration::from_secs(3600)),
@@ -116,6 +141,7 @@ pub(crate) async fn connect_chain(
     });
     let mut handles: Vec<Handle<ClientHandler>> = Vec::new();
     let mut new_hosts: Vec<KnownHost> = Vec::new();
+    let last = hops.len().saturating_sub(1);
 
     for (i, hop) in hops.iter().enumerate() {
         let outcome = Arc::new(Mutex::new(HostKeyOutcome::Pending));
@@ -125,6 +151,7 @@ pub(crate) async fn connect_chain(
             known: known.clone(),
             trust_override,
             outcome: outcome.clone(),
+            forward_to: if i == last { forward_to.clone() } else { None },
         };
 
         // First hop uses a real TcpStream; later hops tunnel through the
@@ -200,7 +227,7 @@ pub(crate) async fn connect(
     (Handle<ClientHandler>, Channel<Msg>, Vec<Handle<ClientHandler>>, Vec<KnownHost>),
     SshConnectError,
 > {
-    let (mut target, jumps, new_hosts) = connect_chain(hops, known, trust_override).await?;
+    let (mut target, jumps, new_hosts) = connect_chain(hops, known, trust_override, None).await?;
     let channel = open_shell(&mut target, cols, rows)
         .await
         .map_err(|e| SshConnectError::Other(format!("{e:#}")))?;
@@ -266,7 +293,7 @@ pub(crate) async fn run_exec(
 ) -> Result<String, SshConnectError> {
     // `_jump` and `handle` stay owned until end of scope, keeping the tunnels
     // and target session alive for the whole exec.
-    let (handle, _jump, _new) = connect_chain(hops, known, false).await?;
+    let (handle, _jump, _new) = connect_chain(hops, known, false, None).await?;
     let mut channel = handle
         .channel_open_session()
         .await
