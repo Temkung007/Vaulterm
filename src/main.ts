@@ -24,6 +24,9 @@ const searchEl = $<HTMLInputElement>("search");
 const tabbarEl = $<HTMLDivElement>("tabbar");
 const terminalsEl = $<HTMLDivElement>("terminals");
 const emptyStateEl = $<HTMLDivElement>("empty-state");
+const splitActionsEl = $<HTMLDivElement>("split-actions");
+const splitRightBtn = $<HTMLButtonElement>("split-right");
+const splitDownBtn = $<HTMLButtonElement>("split-down");
 
 // Lock screen
 const lockScreenEl = $<HTMLDivElement>("lock-screen");
@@ -55,6 +58,11 @@ interface OpenSession {
 let connections: Connection[] = [];
 const sessions = new Map<string, OpenSession>();
 let activeSessionId: string | null = null;
+/** Session ids currently tiled together in the workspace (1 = single view). */
+let visible: string[] = [];
+/** Direction of a 2-pane split: "row" = side by side, "col" = stacked. */
+let splitDir: "row" | "col" = "row";
+const MAX_PANES = 4;
 let appUnlocked = false;
 let lockMode: "create" | "unlock" = "unlock";
 let autoLockMinutes = 0;
@@ -280,7 +288,9 @@ async function handleReorderDrop(targetId: string): Promise<void> {
 
 // ---- Sessions / tabs --------------------------------------------------------
 
-async function openSession(conn: Connection): Promise<void> {
+/** Create a session + its tab, mount it, and register it — without deciding
+ *  the layout. Returns the new session id. */
+function createSession(conn: Connection): string {
   const sessionId = crypto.randomUUID();
   const session = new TerminalSession(conn, sessionId, {
     fontSize: termFontSize,
@@ -307,26 +317,103 @@ async function openSession(conn: Connection): Promise<void> {
     tabEl.classList.add(s);
     renderSidebar();
   };
+  session.onFocus = () => focusPane(sessionId);
+  session.onRequestClose = () => closeSession(sessionId);
 
   terminalsEl.append(session.element);
   sessions.set(sessionId, { session, tabEl });
-
-  activateSession(sessionId);
-  renderSidebar();
-  await session.start();
+  return sessionId;
 }
 
-function activateSession(sessionId: string): void {
+/** Open a connection in a fresh, full-window session. */
+async function openSession(conn: Connection): Promise<void> {
+  const sessionId = createSession(conn);
+  showSingle(sessionId);
+  renderSidebar();
+  await sessions.get(sessionId)?.session.start();
+}
+
+/** Split the focused pane: open another shell on the same connection and tile
+ *  it beside (row) or below (col) the current one. */
+async function splitActive(dir: "row" | "col"): Promise<void> {
+  if (!activeSessionId || visible.length >= MAX_PANES) return;
+  const active = sessions.get(activeSessionId);
+  if (!active) return;
+  splitDir = dir;
+  const sessionId = createSession(active.session.connection);
+  visible.push(sessionId);
   activeSessionId = sessionId;
+  renderLayout();
+  renderSidebar();
+  await sessions.get(sessionId)?.session.start();
+}
+
+/** Show a single session full-window (collapses any split). */
+function showSingle(sessionId: string): void {
+  visible = [sessionId];
+  activeSessionId = sessionId;
+  renderLayout();
+  sessions.get(sessionId)?.session.focus();
+}
+
+/** Move keyboard focus/highlight to a pane already in the tile. */
+function focusPane(sessionId: string): void {
+  if (!visible.includes(sessionId)) return;
+  activeSessionId = sessionId;
+  const split = visible.length > 1;
+  for (const sid of visible) {
+    sessions.get(sid)?.session.setFocused(split && sid === sessionId);
+    sessions.get(sid)?.tabEl.classList.toggle("active", sid === sessionId);
+  }
+}
+
+/** Clicking a tab: focus it if already tiled, otherwise show it full-window. */
+function activateSession(sessionId: string): void {
+  if (visible.includes(sessionId)) {
+    focusPane(sessionId);
+    sessions.get(sessionId)?.session.focus();
+  } else {
+    showSingle(sessionId);
+  }
+}
+
+/** Apply the current `visible` set + split direction to the DOM. */
+function renderLayout(): void {
+  const split = visible.length > 1;
+  terminalsEl.classList.toggle("terminals--split", split);
+
+  if (split) {
+    const n = visible.length;
+    const cols = n === 2 ? (splitDir === "row" ? 2 : 1) : 2;
+    const rows = n === 2 ? (splitDir === "row" ? 1 : 2) : n <= 2 ? 1 : 2;
+    terminalsEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    terminalsEl.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+  } else {
+    terminalsEl.style.gridTemplateColumns = "";
+    terminalsEl.style.gridTemplateRows = "";
+  }
 
   for (const [sid, { session, tabEl }] of sessions) {
-    const active = sid === sessionId;
-    session.element.classList.toggle("hidden", !active);
-    tabEl.classList.toggle("active", active);
-    if (active) session.focus();
+    const shown = visible.includes(sid);
+    session.element.classList.toggle("hidden", !shown);
+    tabEl.classList.toggle("active", sid === activeSessionId);
+    if (shown) {
+      session.setTiled(split);
+      session.setFocused(split && sid === activeSessionId);
+      session.refit();
+    }
   }
 
   emptyStateEl.classList.toggle("hidden", sessions.size > 0);
+  updateSplitButtons();
+}
+
+/** Enable the split buttons only when splitting is possible. */
+function updateSplitButtons(): void {
+  splitActionsEl.classList.toggle("hidden", sessions.size === 0);
+  const canSplit = !!activeSessionId && visible.length < MAX_PANES;
+  splitRightBtn.disabled = !canSplit;
+  splitDownBtn.disabled = !canSplit;
 }
 
 function closeSession(sessionId: string): void {
@@ -337,11 +424,22 @@ function closeSession(sessionId: string): void {
   open.tabEl.remove();
   sessions.delete(sessionId);
 
-  if (activeSessionId === sessionId) {
-    activeSessionId = null;
-    const next = [...sessions.keys()].at(-1);
-    if (next) activateSession(next);
-    else emptyStateEl.classList.remove("hidden");
+  const wasVisible = visible.includes(sessionId);
+  visible = visible.filter((s) => s !== sessionId);
+
+  if (wasVisible) {
+    if (visible.length > 0) {
+      if (activeSessionId === sessionId) activeSessionId = visible[visible.length - 1];
+      renderLayout();
+      sessions.get(activeSessionId!)?.session.focus();
+    } else {
+      const next = [...sessions.keys()].at(-1);
+      if (next) showSingle(next);
+      else {
+        activeSessionId = null;
+        renderLayout();
+      }
+    }
   }
   renderSidebar();
 }
@@ -597,6 +695,8 @@ function bindUi(): void {
   $("cp-change").addEventListener("click", () => void handleChangePassword());
   $("vault-export").addEventListener("click", () => void handleExportVault());
   $("vault-import").addEventListener("click", () => void handleImportVault());
+  splitRightBtn.addEventListener("click", () => void splitActive("row"));
+  splitDownBtn.addEventListener("click", () => void splitActive("col"));
   setTermThemeEl.replaceChildren(
     ...Object.keys(TERMINAL_THEMES).map((n) => {
       const o = document.createElement("option");

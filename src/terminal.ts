@@ -131,12 +131,17 @@ export class TerminalSession {
   private raf = 0;
   private onZoom?: (delta: number | "reset") => void;
 
+  private body: HTMLDivElement;
   private searchBar?: HTMLDivElement;
   private searchInput?: HTMLInputElement;
   private searchCount?: HTMLSpanElement;
 
   status: SessionStatus = "connecting";
   onStatusChange?: (s: SessionStatus) => void;
+  /** Fired when this pane gains focus (used to track the active pane). */
+  onFocus?: () => void;
+  /** Fired when the pane's own close button (shown when tiled) is clicked. */
+  onRequestClose?: () => void;
 
   constructor(connection: Connection, sessionId: string, prefs?: TerminalPrefs) {
     this.connection = connection;
@@ -145,6 +150,31 @@ export class TerminalSession {
 
     this.element = document.createElement("div");
     this.element.className = "term-pane";
+
+    // Per-pane header (title + close). Only shown when the view is split.
+    const header = document.createElement("div");
+    header.className = "term-pane__header";
+    const title = document.createElement("span");
+    title.className = "term-pane__title";
+    title.textContent = connection.name || `${connection.username}@${connection.host}`;
+    const close = document.createElement("button");
+    close.className = "term-pane__close";
+    close.type = "button";
+    close.textContent = "×";
+    close.title = "Close pane";
+    close.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.onRequestClose?.();
+    });
+    header.append(title, close);
+
+    this.body = document.createElement("div");
+    this.body.className = "term-pane__body";
+    this.element.append(header, this.body);
+
+    // Any focus inside the pane (xterm textarea, header) marks it active.
+    this.element.addEventListener("focusin", () => this.onFocus?.());
+    this.element.addEventListener("mousedown", () => this.onFocus?.());
 
     this.term = new Terminal({
       cursorBlink: true,
@@ -189,9 +219,26 @@ export class TerminalSession {
     this.term.options.theme = TERMINAL_THEMES[themeName] ?? TERMINAL_THEMES[DEFAULT_THEME];
   }
 
+  /** Show/hide the per-pane header (used only when the view is split). */
+  setTiled(tiled: boolean): void {
+    this.element.classList.toggle("term-pane--tiled", tiled);
+    this.refit();
+  }
+
+  /** Highlight this pane as the focused one within a split view. */
+  setFocused(focused: boolean): void {
+    this.element.classList.toggle("term-pane--focused", focused);
+  }
+
+  /** Re-measure and resize the grid to fit the pane (after a layout change). */
+  refit(): void {
+    cancelAnimationFrame(this.raf);
+    this.raf = requestAnimationFrame(() => this.safeFit());
+  }
+
   /** Open the terminal, wire I/O, and start the SSH session. */
   async start(): Promise<void> {
-    this.term.open(this.element);
+    this.term.open(this.body);
 
     // First fit must run after the pane has a real size.
     await new Promise<void>((resolve) =>
@@ -350,7 +397,7 @@ export class TerminalSession {
     close.addEventListener("click", () => this.closeSearch());
 
     bar.append(input, count, prev, next, close);
-    this.element.append(bar);
+    this.body.append(bar);
     this.searchBar = bar;
     this.searchInput = input;
     this.searchCount = count;

@@ -31,7 +31,15 @@
 
       <!-- Main: terminal tabs -->
       <main id="main">
-        <div id="tabbar" class="tabbar"></div>
+        <div class="topbar">
+          <div id="tabbar" class="tabbar"></div>
+          <div id="split-actions" class="topbar__actions hidden">
+            <button id="split-right" class="split-btn" type="button"
+              title="Split right — open another shell side by side">▥</button>
+            <button id="split-down" class="split-btn" type="button"
+              title="Split down — open another shell below">▤</button>
+          </div>
+        </div>
         <div id="terminals" class="terminals">
           <div id="empty-state" class="empty-state">
             <div class="empty-state__art">▮</div>
