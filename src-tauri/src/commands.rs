@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::sftp::{self, FileEntry, SftpConn};
 use crate::ssh::{self, SessionInput, SshConnectError};
 use crate::store::{Connection, KnownHost, Settings, Snippet};
+use crate::tunnel::{self, Tunnel, TunnelInfo};
 use crate::vault::Vault;
 use crate::AppState;
 
@@ -497,4 +498,91 @@ pub async fn ssh_run(
         }
         SshConnectError::Other(m) => m,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Port forwarding (tunnels)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn tunnel_start(
+    state: State<'_, AppState>,
+    connection_id: String,
+    kind: String,
+    bind_port: u16,
+    dest_host: String,
+    dest_port: u16,
+) -> Result<TunnelInfo, String> {
+    let hops = resolve_chain(&state.vault, &connection_id)?;
+    let known = state.vault.read(|d| d.known_hosts.clone()).map_err(|e| e.to_string())?;
+    let (handle, jump, new_hosts) = ssh::connect_chain(hops, known, false)
+        .await
+        .map_err(|e| match e {
+            SshConnectError::HostKeyMismatch { host, port, .. } => {
+                format!("host key for {host}:{port} changed — open a terminal to it first")
+            }
+            SshConnectError::Other(m) => m,
+        })?;
+    store_known_hosts(&state.vault, new_hosts);
+
+    // Shared across the accept loop + every per-connection piping task.
+    let handle = Arc::new(handle);
+
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", bind_port))
+        .await
+        .map_err(|e| format!("cannot bind 127.0.0.1:{bind_port} — {e}"))?;
+    let bound = listener.local_addr().map(|a| a.port()).unwrap_or(bind_port);
+
+    let task = if kind == "dynamic" {
+        tokio::spawn(tunnel::run_dynamic_listener(listener, handle.clone()))
+    } else {
+        tokio::spawn(tunnel::run_local_listener(
+            listener,
+            handle.clone(),
+            dest_host.clone(),
+            dest_port,
+        ))
+    };
+
+    let id = Uuid::new_v4().to_string();
+    let info = TunnelInfo {
+        id: id.clone(),
+        connection_id,
+        kind,
+        bind_port: bound,
+        dest_host,
+        dest_port,
+    };
+    state
+        .tunnels
+        .lock()
+        .unwrap()
+        .insert(id, Tunnel::new(info.clone(), task, handle, jump));
+    Ok(info)
+}
+
+#[tauri::command]
+pub fn tunnel_stop(state: State<'_, AppState>, id: String) {
+    if let Some(t) = state.tunnels.lock().unwrap().remove(&id) {
+        t.abort();
+    }
+}
+
+#[tauri::command]
+pub fn tunnel_list(state: State<'_, AppState>) -> Vec<TunnelInfo> {
+    state
+        .tunnels
+        .lock()
+        .unwrap()
+        .values()
+        .map(|t| t.info.clone())
+        .collect()
+}
+
+#[tauri::command]
+pub fn tunnel_stop_all(state: State<'_, AppState>) {
+    let mut map = state.tunnels.lock().unwrap();
+    for (_, t) in map.drain() {
+        t.abort();
+    }
 }

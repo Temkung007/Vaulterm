@@ -1098,6 +1098,44 @@ body {
   color: var(--danger);
 }
 
+/* ---------- Tunnels (port forwarding) ---------- */
+.modal.tun {
+  width: 500px;
+}
+.tun-list {
+  list-style: none;
+  margin-bottom: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.tun-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+}
+.tun-item__label {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tun-item .btn {
+  padding: 4px 10px;
+  flex-shrink: 0;
+}
+.tun-empty {
+  color: var(--text-faint);
+  font-size: 13px;
+  padding: 8px 4px;
+}
+
 /* scrollbars */
 ::-webkit-scrollbar {
   width: 10px;

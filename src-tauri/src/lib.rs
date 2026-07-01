@@ -2,6 +2,7 @@ mod commands;
 mod sftp;
 mod ssh;
 mod store;
+mod tunnel;
 mod vault;
 
 use std::collections::HashMap;
@@ -11,6 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use sftp::SftpConn;
 use ssh::SessionInput;
+use tunnel::Tunnel;
 use vault::Vault;
 
 /// Shared application state.
@@ -22,6 +24,8 @@ pub struct AppState {
     pub sessions: Mutex<HashMap<String, UnboundedSender<SessionInput>>>,
     /// Connection id -> its lazily-opened SFTP connection.
     pub sftp_conns: Mutex<HashMap<String, Arc<SftpConn>>>,
+    /// Tunnel id -> running port-forward.
+    pub tunnels: Mutex<HashMap<String, Tunnel>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -61,6 +65,10 @@ pub fn run() {
             commands::sftp_delete,
             commands::sftp_close,
             commands::ssh_run,
+            commands::tunnel_start,
+            commands::tunnel_stop,
+            commands::tunnel_list,
+            commands::tunnel_stop_all,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

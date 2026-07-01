@@ -214,6 +214,46 @@
       </div>
     </div>
 
+    <!-- Port forwarding (tunnels) -->
+    <div id="tun-backdrop" class="modal-backdrop hidden">
+      <div class="modal tun">
+        <div class="dash__head">
+          <h2 id="tun-title" class="modal__title">Tunnels</h2>
+          <button id="tun-close" type="button" class="btn btn--ghost">Close</button>
+        </div>
+        <ul id="tun-list" class="tun-list"></ul>
+        <hr class="form__sep" />
+        <h3 class="form__subtitle">New tunnel</h3>
+        <div class="form">
+          <label class="form__row">
+            <span>Type</span>
+            <select id="tun-kind">
+              <option value="local">Local (-L) — reach a remote service locally</option>
+              <option value="dynamic">Dynamic SOCKS (-D) — proxy through the server</option>
+            </select>
+          </label>
+          <label class="form__row">
+            <span>Local port</span>
+            <input id="tun-bind" type="number" min="1" max="65535" placeholder="8080" />
+          </label>
+          <div id="tun-local-fields">
+            <label class="form__row">
+              <span>Destination host <em>(as seen from the server)</em></span>
+              <input id="tun-dhost" type="text" placeholder="localhost / db.internal" />
+            </label>
+            <label class="form__row">
+              <span>Destination port</span>
+              <input id="tun-dport" type="number" min="1" max="65535" placeholder="5432" />
+            </label>
+          </div>
+          <p id="tun-msg" class="form__error hidden"></p>
+          <div class="form__actions">
+            <button id="tun-start" type="button" class="btn btn--primary">Start tunnel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Server dashboard -->
     <div id="dash-backdrop" class="modal-backdrop hidden">
       <div class="modal dash">

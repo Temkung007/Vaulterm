@@ -206,6 +206,37 @@ export function sshRun(connectionId: string, command: string): Promise<string> {
   return invoke("ssh_run", { connectionId, command });
 }
 
+// ---- Port forwarding (tunnels) ----------------------------------------------
+
+export interface TunnelInfo {
+  id: string;
+  connectionId: string;
+  /** "local" or "dynamic". */
+  kind: string;
+  bindPort: number;
+  destHost: string;
+  destPort: number;
+}
+
+export function tunnelStart(
+  connectionId: string,
+  kind: "local" | "dynamic",
+  bindPort: number,
+  destHost: string,
+  destPort: number,
+): Promise<TunnelInfo> {
+  return invoke("tunnel_start", { connectionId, kind, bindPort, destHost, destPort });
+}
+export function tunnelStop(id: string): Promise<void> {
+  return invoke("tunnel_stop", { id });
+}
+export function tunnelList(): Promise<TunnelInfo[]> {
+  return invoke("tunnel_list");
+}
+export function tunnelStopAll(): Promise<void> {
+  return invoke("tunnel_stop_all");
+}
+
 // ---- Vault backup / restore -------------------------------------------------
 
 export function vaultExport(destPath: string): Promise<void> {

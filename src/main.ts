@@ -6,6 +6,7 @@ import { TerminalSession, type SessionStatus, TERMINAL_THEMES, DEFAULT_THEME } f
 import { CommandPalette } from "./snippets";
 import { FilesBrowser } from "./files";
 import { DashboardPanel } from "./dashboard";
+import { TunnelsPanel } from "./tunnels";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 // ---- DOM refs ---------------------------------------------------------------
@@ -127,6 +128,12 @@ function buildConnItem(conn: Connection): HTMLLIElement {
     e.stopPropagation();
     void dashboard.open(conn);
   });
+  const tunBtn = el("button", "icon-btn", "🚇");
+  tunBtn.title = "Port forwarding";
+  tunBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void tunnels.open(conn);
+  });
   const filesBtn = el("button", "icon-btn", "📁");
   filesBtn.title = "Browse files";
   filesBtn.addEventListener("click", (e) => {
@@ -145,7 +152,7 @@ function buildConnItem(conn: Connection): HTMLLIElement {
     e.stopPropagation();
     void removeConnection(conn);
   });
-  actions.append(dashBtn, filesBtn, editBtn, delBtn);
+  actions.append(dashBtn, tunBtn, filesBtn, editBtn, delBtn);
 
   item.append(dot, star, body, actions);
   item.addEventListener("click", () => void openSession(conn));
@@ -359,6 +366,7 @@ const palette = new CommandPalette((command) => {
 
 const filesBrowser = new FilesBrowser();
 const dashboard = new DashboardPanel();
+const tunnels = new TunnelsPanel();
 
 async function removeConnection(conn: Connection): Promise<void> {
   const ok = confirm(`Delete "${conn.name || connectionSubtitle(conn)}"?\nThis also removes its saved password.`);
@@ -433,9 +441,11 @@ async function handleLockSubmit(e: SubmitEvent): Promise<void> {
 }
 
 async function lockApp(): Promise<void> {
-  // Tear down overlays + live sessions before the key is wiped.
+  // Tear down overlays, tunnels + live sessions before the key is wiped.
   filesBrowser.hideForLock();
   dashboard.hideForLock();
+  tunnels.hideForLock();
+  void api.tunnelStopAll().catch(() => {});
   for (const sid of [...sessions.keys()]) closeSession(sid);
   try {
     await api.vaultLock();
