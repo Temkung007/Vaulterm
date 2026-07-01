@@ -142,6 +142,10 @@ export class TerminalSession {
   onFocus?: () => void;
   /** Fired when the pane's own close button (shown when tiled) is clicked. */
   onRequestClose?: () => void;
+  /** Whether this pane is the active one. When set, connect-time and
+   *  startup-command focus is suppressed for non-active panes so a late SSH
+   *  connect can't steal keyboard focus from a pane the user switched to. */
+  isActive?: () => boolean;
 
   constructor(connection: Connection, sessionId: string, prefs?: TerminalPrefs) {
     this.connection = connection;
@@ -281,7 +285,7 @@ export class TerminalSession {
     try {
       await attempt(false);
       this.setStatus("connected");
-      this.term.focus();
+      this.focusIfActive();
       this.runStartupCommands();
     } catch (e) {
       if (api.isHostKeyMismatch(e)) {
@@ -298,7 +302,7 @@ export class TerminalSession {
           try {
             await attempt(true);
             this.setStatus("connected");
-            this.term.focus();
+            this.focusIfActive();
             this.runStartupCommands();
           } catch (retryErr) {
             this.term.writeln(`\r\n\x1b[31m✖ ${formatError(retryErr)}\x1b[0m`);
@@ -330,11 +334,16 @@ export class TerminalSession {
     requestAnimationFrame(() => this.safeFit());
   }
 
+  /** Focus only if this pane is the active one (or activeness is unknown). */
+  private focusIfActive(): void {
+    if (!this.isActive || this.isActive()) this.term.focus();
+  }
+
   /** Type `text` into the remote shell (no trailing newline) and focus it.
    *  Used by the command palette to insert a snippet for the user to review. */
   sendText(text: string): void {
     api.sshWrite(this.sessionId, bytesToB64(encoder.encode(text))).catch(() => {});
-    this.term.focus();
+    this.focusIfActive();
   }
 
   /** Run the connection's startup commands once the shell is ready. */

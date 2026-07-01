@@ -319,6 +319,7 @@ function createSession(conn: Connection): string {
   };
   session.onFocus = () => focusPane(sessionId);
   session.onRequestClose = () => closeSession(sessionId);
+  session.isActive = () => activeSessionId === sessionId;
 
   terminalsEl.append(session.element);
   sessions.set(sessionId, { session, tabEl });
@@ -339,13 +340,19 @@ async function splitActive(dir: "row" | "col"): Promise<void> {
   if (!activeSessionId || visible.length >= MAX_PANES) return;
   const active = sessions.get(activeSessionId);
   if (!active) return;
-  splitDir = dir;
   const sessionId = createSession(active.session.connection);
   visible.push(sessionId);
+  // Only a 2-pane split has an orientation; 3-4 panes tile 2x2. Setting splitDir
+  // only at 2 panes means collapsing 3->2 keeps the last real 2-pane direction.
+  if (visible.length === 2) splitDir = dir;
   activeSessionId = sessionId;
   renderLayout();
   renderSidebar();
   await sessions.get(sessionId)?.session.start();
+  // If the new pane failed to connect, don't leave a dead, focused pane taking
+  // up half the split — remove it and restore the previous layout.
+  const created = sessions.get(sessionId);
+  if (created && created.session.status === "closed") closeSession(sessionId);
 }
 
 /** Show a single session full-window (collapses any split). */
@@ -365,16 +372,17 @@ function focusPane(sessionId: string): void {
     sessions.get(sid)?.session.setFocused(split && sid === sessionId);
     sessions.get(sid)?.tabEl.classList.toggle("active", sid === sessionId);
   }
+  // Make DOM keyboard focus follow the active pane (e.g. a header click, which
+  // lands on a non-focusable element, otherwise leaves keys going to the old
+  // pane). Re-entrant-safe: focus() -> focusin -> focusPane is idempotent and
+  // won't re-focus an already-focused terminal.
+  sessions.get(sessionId)?.session.focus();
 }
 
 /** Clicking a tab: focus it if already tiled, otherwise show it full-window. */
 function activateSession(sessionId: string): void {
-  if (visible.includes(sessionId)) {
-    focusPane(sessionId);
-    sessions.get(sessionId)?.session.focus();
-  } else {
-    showSingle(sessionId);
-  }
+  if (visible.includes(sessionId)) focusPane(sessionId);
+  else showSingle(sessionId);
 }
 
 /** Apply the current `visible` set + split direction to the DOM. */
@@ -401,6 +409,10 @@ function renderLayout(): void {
       session.setTiled(split);
       session.setFocused(split && sid === activeSessionId);
       session.refit();
+    } else {
+      // Don't leave hidden panes carrying stale tiled/focused classes.
+      session.setTiled(false);
+      session.setFocused(false);
     }
   }
 
@@ -544,7 +556,16 @@ async function lockApp(): Promise<void> {
   dashboard.hideForLock();
   tunnels.hideForLock();
   void api.tunnelStopAll().catch(() => {});
-  for (const sid of [...sessions.keys()]) closeSession(sid);
+  // Dispose every session directly — going through closeSession would re-show
+  // and re-focus soon-to-be-disposed panes on each iteration.
+  visible = [];
+  activeSessionId = null;
+  for (const { session, tabEl } of sessions.values()) {
+    session.dispose();
+    tabEl.remove();
+  }
+  sessions.clear();
+  renderLayout();
   try {
     await api.vaultLock();
   } catch {
