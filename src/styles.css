@@ -1011,22 +1011,17 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.files__textarea {
+.files__editor-cm {
   flex: 1;
-  resize: none;
-  border: none;
-  outline: none;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 1.5;
-  padding: 12px;
-  white-space: pre;
-  overflow: auto;
+  min-height: 0;
+  overflow: hidden;
 }
-.files__textarea:read-only {
-  color: var(--text-dim);
+.files__editor-cm .cm-editor {
+  height: 100%;
+  font-size: 13px;
+}
+.files__editor-cm .cm-editor.cm-focused {
+  outline: none;
 }
 .files__status {
   padding: 6px 14px;

@@ -1,6 +1,7 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import * as api from "./api";
 import type { Connection, FileEntry } from "./api";
+import { CodeEditor } from "./editor";
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -56,7 +57,7 @@ export class FilesBrowser {
   private listEl = $<HTMLUListElement>("files-list");
   private openPathEl = $<HTMLSpanElement>("files-openpath");
   private saveBtn = $<HTMLButtonElement>("files-save");
-  private contentEl = $<HTMLTextAreaElement>("files-content");
+  private editor: CodeEditor;
   private statusEl = $<HTMLDivElement>("files-status");
 
   private conn?: Connection;
@@ -71,12 +72,12 @@ export class FilesBrowser {
     $("files-newfolder").addEventListener("click", () => void this.newFolder());
     $("files-upload").addEventListener("click", () => void this.uploadFiles());
     this.saveBtn.addEventListener("click", () => void this.save());
-    this.contentEl.addEventListener("input", () => this.setDirty(true));
+    this.editor = new CodeEditor($("files-editor"), () => this.setDirty(true));
     this.backdrop.addEventListener("mousedown", (e) => {
       if (e.target === this.backdrop) this.close();
     });
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && this.isOpen && document.activeElement !== this.contentEl) {
+      if (e.key === "Escape" && this.isOpen && !$("files-editor").contains(document.activeElement)) {
         this.close();
       }
     });
@@ -266,13 +267,13 @@ export class FilesBrowser {
     this.setStatus("Opening…");
     try {
       const content = await api.sftpRead(this.conn.id, path);
-      this.contentEl.value = content;
-      this.contentEl.readOnly = false;
+      this.editor.setContent(content, path);
+      this.editor.setReadOnly(false);
       this.openPath = path;
       this.openPathEl.textContent = path;
       this.setDirty(false);
       this.setStatus("");
-      this.contentEl.focus();
+      this.editor.focus();
     } catch (e) {
       this.setStatus(errText(e), "error");
     }
@@ -288,7 +289,7 @@ export class FilesBrowser {
     if (!ok) return;
     this.setStatus("Saving…");
     try {
-      await api.sftpWrite(this.conn.id, this.openPath, this.contentEl.value);
+      await api.sftpWrite(this.conn.id, this.openPath, this.editor.getContent());
       this.setDirty(false);
       this.setStatus(`Saved ${this.openPath}`, "ok");
     } catch (e) {
@@ -305,8 +306,7 @@ export class FilesBrowser {
   }
 
   private clearEditor(): void {
-    this.contentEl.value = "";
-    this.contentEl.readOnly = true;
+    this.editor.clear();
     this.openPath = null;
     this.openPathEl.textContent = "No file open";
     this.dirty = false;
