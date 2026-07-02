@@ -717,6 +717,68 @@ body {
   display: flex;
   gap: 2px;
 }
+.sidebar__footer-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+}
+.sidebar__version {
+  font-size: 10px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  letter-spacing: 0.2px;
+}
+
+/* ---------- UI polish ---------- */
+.btn,
+.icon-btn,
+.split-btn,
+.conn-item,
+.tab,
+.tab__close,
+.conn-item__star,
+.term-pane__close {
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease,
+    opacity 0.12s ease;
+}
+.btn:active,
+.icon-btn:active,
+.split-btn:active {
+  transform: translateY(1px);
+}
+button:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Text inputs keep their own border-focus treatment. */
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  background-clip: padding-box;
+}
 
 .form__actions {
   display: flex;
@@ -979,6 +1041,56 @@ body {
   line-height: 1.5;
   color: var(--text-faint);
   max-width: 280px;
+}
+.lock-version {
+  margin-top: 14px;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--text-faint);
+  letter-spacing: 0.2px;
+}
+
+/* ---------- Auto-update banner ---------- */
+.update-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px 7px 14px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  max-width: calc(100vw - 32px);
+  animation: banner-in 0.25s ease;
+}
+.update-banner.hidden {
+  display: none;
+}
+.update-banner__icon {
+  font-size: 15px;
+  line-height: 1;
+}
+.update-banner__text {
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@keyframes banner-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 /* ---------- Remote file browser + editor ---------- */

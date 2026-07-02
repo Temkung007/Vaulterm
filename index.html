@@ -7,6 +7,14 @@
   </head>
   <body>
     <div id="app" class="hidden">
+      <!-- Auto-update notification (shown when a newer release is found) -->
+      <div id="update-banner" class="update-banner hidden">
+        <span class="update-banner__icon">🔔</span>
+        <span id="update-banner-text" class="update-banner__text">Update available</span>
+        <button id="update-banner-go" type="button" class="btn btn--primary btn--sm">Update now</button>
+        <button id="update-banner-dismiss" type="button" class="icon-btn" title="Dismiss">✕</button>
+      </div>
+
       <!-- Sidebar: saved SSH connections -->
       <aside id="sidebar">
         <header class="sidebar__header">
@@ -21,7 +29,10 @@
         </div>
         <ul id="conn-list" class="conn-list"></ul>
         <footer class="sidebar__footer">
-          <span id="conn-count">0 connections</span>
+          <div class="sidebar__footer-meta">
+            <span id="conn-count">0 connections</span>
+            <span id="app-version" class="sidebar__version"></span>
+          </div>
           <div class="sidebar__footer-actions">
             <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
             <button id="btn-lock" class="icon-btn" title="Lock vault (Ctrl+L)">🔒</button>
@@ -76,6 +87,7 @@
           <button id="lock-submit" type="submit" class="btn btn--primary">Unlock</button>
         </form>
         <p id="lock-hint" class="lock-hint"></p>
+        <p id="lock-version" class="lock-version"></p>
       </div>
     </div>
 

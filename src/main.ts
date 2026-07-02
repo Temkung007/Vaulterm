@@ -8,7 +8,7 @@ import { FilesBrowser } from "./files";
 import { DashboardPanel } from "./dashboard";
 import { TunnelsPanel } from "./tunnels";
 import { ActionsPanel } from "./actions";
-import { checkForUpdates, type UpdateStatus } from "./updater";
+import { checkForUpdates, fetchUpdate, installUpdate, type UpdateStatus, type Update } from "./updater";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 
@@ -554,6 +554,8 @@ async function enterApp(): Promise<void> {
   } catch {
     applyAutoLock(0);
   }
+  // Quietly check for a newer release; show a banner if one is available.
+  void maybeShowUpdateBanner();
 }
 
 async function handleLockSubmit(e: SubmitEvent): Promise<void> {
@@ -581,6 +583,7 @@ async function lockApp(): Promise<void> {
   dashboard.hideForLock();
   tunnels.hideForLock();
   actionsPanel.hideForLock();
+  $("update-banner").classList.add("hidden");
   void api.tunnelStopAll().catch(() => {});
   // Dispose every session directly — going through closeSession would re-show
   // and re-focus soon-to-be-disposed panes on each iteration.
@@ -689,6 +692,41 @@ async function handleCheckUpdates(): Promise<void> {
   }
 }
 
+/** Show the auto-update banner for an available update. */
+function showUpdateBanner(update: Update): void {
+  const banner = $("update-banner");
+  const text = $("update-banner-text");
+  const go = $<HTMLButtonElement>("update-banner-go");
+  text.textContent = `Vaulterm v${update.version} is available (you have v${update.currentVersion}).`;
+  go.disabled = false;
+  go.textContent = "Update now";
+  go.onclick = () => {
+    go.disabled = true;
+    void installUpdate(update, (s) => {
+      if (s.kind === "downloading") {
+        text.textContent = s.pct != null ? `Downloading update… ${s.pct}%` : "Downloading update…";
+      } else if (s.kind === "installed") {
+        text.textContent = "Installed — relaunching…";
+      } else if (s.kind === "error") {
+        text.textContent = `Update failed: ${s.message}`;
+        go.disabled = false;
+      }
+    });
+  };
+  $("update-banner-dismiss").onclick = () => banner.classList.add("hidden");
+  banner.classList.remove("hidden");
+}
+
+/** Silently check for an update on startup; show a banner if one is available. */
+async function maybeShowUpdateBanner(): Promise<void> {
+  try {
+    const update = await fetchUpdate();
+    if (update) showUpdateBanner(update);
+  } catch {
+    /* offline or no manifest — stay quiet */
+  }
+}
+
 function closeSettings(): void {
   settingsBackdropEl.classList.add("hidden");
   cpCurrentEl.value = "";
@@ -766,6 +804,13 @@ function errText(e: unknown): string {
 // ---- Wiring -----------------------------------------------------------------
 
 function bindUi(): void {
+  // Show the app version on the lock screen and in the sidebar footer.
+  void getVersion()
+    .then((v) => {
+      $("app-version").textContent = `v${v}`;
+      $("lock-version").textContent = `Vaulterm v${v}`;
+    })
+    .catch(() => {});
   lockFormEl.addEventListener("submit", (e) => void handleLockSubmit(e));
   $("btn-new").addEventListener("click", () => modal.openNew());
   $("btn-new-2").addEventListener("click", () => modal.openNew());

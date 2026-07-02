@@ -16,37 +16,19 @@ function errText(e: unknown): string {
   return String(e);
 }
 
-/**
- * Check GitHub Releases for a newer signed build. If one is found, confirm with
- * the user, download + install it, then relaunch. Reports progress via `onStatus`.
- */
-export async function checkForUpdates(onStatus: (s: UpdateStatus) => void): Promise<void> {
-  onStatus({ kind: "checking" });
+export type { Update };
 
-  let update: Update | null;
-  try {
-    update = await check();
-  } catch (e) {
-    onStatus({ kind: "error", message: errText(e) });
-    return;
-  }
+/** Query GitHub Releases for a newer signed build. Returns the update handle,
+ *  or null if already current. Throws if the check itself fails (offline etc). */
+export async function fetchUpdate(): Promise<Update | null> {
+  return await check();
+}
 
-  if (!update) {
-    onStatus({ kind: "uptodate" });
-    return;
-  }
-
-  const ok = confirm(
-    `A new version of Vaulterm is available.\n\n` +
-      `New: v${update.version}\nCurrent: v${update.currentVersion}\n\n` +
-      (update.body ? `${update.body}\n\n` : "") +
-      `Download and install now? The app will relaunch when it finishes.`,
-  );
-  if (!ok) {
-    onStatus({ kind: "uptodate" });
-    return;
-  }
-
+/** Download + install the given update, then relaunch. Reports progress. */
+export async function installUpdate(
+  update: Update,
+  onStatus: (s: UpdateStatus) => void,
+): Promise<void> {
   try {
     let total = 0;
     let downloaded = 0;
@@ -73,4 +55,38 @@ export async function checkForUpdates(onStatus: (s: UpdateStatus) => void): Prom
   } catch (e) {
     onStatus({ kind: "error", message: errText(e) });
   }
+}
+
+/**
+ * Manual "Check for updates": check, confirm with the user, then install.
+ * Reports progress via `onStatus`.
+ */
+export async function checkForUpdates(onStatus: (s: UpdateStatus) => void): Promise<void> {
+  onStatus({ kind: "checking" });
+
+  let update: Update | null;
+  try {
+    update = await fetchUpdate();
+  } catch (e) {
+    onStatus({ kind: "error", message: errText(e) });
+    return;
+  }
+
+  if (!update) {
+    onStatus({ kind: "uptodate" });
+    return;
+  }
+
+  const ok = confirm(
+    `A new version of Vaulterm is available.\n\n` +
+      `New: v${update.version}\nCurrent: v${update.currentVersion}\n\n` +
+      (update.body ? `${update.body}\n\n` : "") +
+      `Download and install now? The app will relaunch when it finishes.`,
+  );
+  if (!ok) {
+    onStatus({ kind: "uptodate" });
+    return;
+  }
+
+  await installUpdate(update, onStatus);
 }
