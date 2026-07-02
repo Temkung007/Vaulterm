@@ -1,12 +1,13 @@
 import "./styles.css";
 import * as api from "./api";
-import type { Connection } from "./api";
+import type { Connection, ConnAction } from "./api";
 import { ConnectionModal, connectionSubtitle, type SavePayload } from "./connections";
 import { TerminalSession, type SessionStatus, TERMINAL_THEMES, DEFAULT_THEME } from "./terminal";
 import { CommandPalette } from "./snippets";
 import { FilesBrowser } from "./files";
 import { DashboardPanel } from "./dashboard";
 import { TunnelsPanel } from "./tunnels";
+import { ActionsPanel } from "./actions";
 import { checkForUpdates, type UpdateStatus } from "./updater";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
@@ -144,6 +145,12 @@ function buildConnItem(conn: Connection): HTMLLIElement {
     e.stopPropagation();
     void tunnels.open(conn);
   });
+  const actBtn = el("button", "icon-btn", "▶");
+  actBtn.title = "Quick actions (one-click commands)";
+  actBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    actionsPanel.open(conn);
+  });
   const filesBtn = el("button", "icon-btn", "📁");
   filesBtn.title = "Browse files";
   filesBtn.addEventListener("click", (e) => {
@@ -162,7 +169,7 @@ function buildConnItem(conn: Connection): HTMLLIElement {
     e.stopPropagation();
     void removeConnection(conn);
   });
-  actions.append(dashBtn, tunBtn, filesBtn, editBtn, delBtn);
+  actions.append(dashBtn, tunBtn, actBtn, filesBtn, editBtn, delBtn);
 
   item.append(dot, star, body, actions);
   item.addEventListener("click", () => void openSession(conn));
@@ -292,13 +299,14 @@ async function handleReorderDrop(targetId: string): Promise<void> {
 
 /** Create a session + its tab, mount it, and register it — without deciding
  *  the layout. Returns the new session id. */
-function createSession(conn: Connection): string {
+function createSession(conn: Connection, runOnConnect?: string): string {
   const sessionId = crypto.randomUUID();
-  const session = new TerminalSession(conn, sessionId, {
-    fontSize: termFontSize,
-    themeName: termTheme,
-    onZoom: handleZoom,
-  });
+  const session = new TerminalSession(
+    conn,
+    sessionId,
+    { fontSize: termFontSize, themeName: termTheme, onZoom: handleZoom },
+    runOnConnect,
+  );
 
   const tabEl = el("div", "tab connecting");
   tabEl.dataset.sid = sessionId;
@@ -479,6 +487,21 @@ const palette = new CommandPalette((command) => {
 const filesBrowser = new FilesBrowser();
 const dashboard = new DashboardPanel();
 const tunnels = new TunnelsPanel();
+const actionsPanel = new ActionsPanel({
+  onRun: (conn, action) => void runAction(conn, action),
+  onChanged: async () => {
+    connections = await api.listConnections();
+    renderSidebar();
+  },
+});
+
+/** Open a terminal to `conn` and run the action's command once connected. */
+async function runAction(conn: Connection, action: ConnAction): Promise<void> {
+  const sessionId = createSession(conn, action.command);
+  showSingle(sessionId);
+  renderSidebar();
+  await sessions.get(sessionId)?.session.start();
+}
 
 async function removeConnection(conn: Connection): Promise<void> {
   const ok = confirm(`Delete "${conn.name || connectionSubtitle(conn)}"?\nThis also removes its saved password.`);
@@ -557,6 +580,7 @@ async function lockApp(): Promise<void> {
   filesBrowser.hideForLock();
   dashboard.hideForLock();
   tunnels.hideForLock();
+  actionsPanel.hideForLock();
   void api.tunnelStopAll().catch(() => {});
   // Dispose every session directly — going through closeSession would re-show
   // and re-focus soon-to-be-disposed panes on each iteration.

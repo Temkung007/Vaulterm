@@ -1229,6 +1229,35 @@ body {
   padding: 8px 4px;
 }
 
+/* Quick actions (reuses .tun-item / .tun-list) */
+.act-item__label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.act-item__name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.act-item__cmd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tun-item .icon-btn {
+  flex-shrink: 0;
+}
+.btn--sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
 /* scrollbars */
 ::-webkit-scrollbar {
   width: 10px;

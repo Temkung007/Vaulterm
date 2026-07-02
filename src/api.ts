@@ -66,6 +66,14 @@ export interface Connection {
   color?: string | null;
   /** Commands typed into the shell right after connecting. */
   startupCommands?: string | null;
+  /** One-click named commands to run on the server (e.g. deploy). */
+  actions?: ConnAction[] | null;
+}
+
+/** A named command runnable on the server in one click. */
+export interface ConnAction {
+  name: string;
+  command: string;
 }
 
 // ---- Connection CRUD --------------------------------------------------------

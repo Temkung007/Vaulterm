@@ -257,6 +257,34 @@
       </div>
     </div>
 
+    <!-- Quick actions (one-click commands) -->
+    <div id="act-backdrop" class="modal-backdrop hidden">
+      <div class="modal tun">
+        <div class="dash__head">
+          <h2 id="act-title" class="modal__title">Quick actions</h2>
+          <button id="act-close" type="button" class="btn btn--ghost">Close</button>
+        </div>
+        <ul id="act-list" class="tun-list"></ul>
+        <hr class="form__sep" />
+        <h3 class="form__subtitle">New action</h3>
+        <div class="form">
+          <label class="form__row">
+            <span>Name</span>
+            <input id="act-name" type="text" placeholder="Deploy" />
+          </label>
+          <label class="form__row">
+            <span>Command <em>(runs on the server after connecting)</em></span>
+            <textarea id="act-command" rows="3"
+              placeholder="cd /var/www/app && git pull && ./deploy.sh"></textarea>
+          </label>
+          <p id="act-msg" class="form__error hidden"></p>
+          <div class="form__actions">
+            <button id="act-add" type="button" class="btn btn--primary">Add action</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Server dashboard -->
     <div id="dash-backdrop" class="modal-backdrop hidden">
       <div class="modal dash">

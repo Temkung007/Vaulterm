@@ -279,6 +279,7 @@ mod tests {
             favorite: false,
             color: None,
             startup_commands: None,
+            actions: None,
             secret: Some("s3cr3t-password".into()),
             key_text: None,
         });

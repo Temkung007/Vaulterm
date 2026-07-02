@@ -41,12 +41,23 @@ pub struct Connection {
     /// Commands to type into the shell right after connecting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub startup_commands: Option<String>,
+    /// One-click named commands to run on the server (e.g. "deploy"). Non-secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions: Option<Vec<ConnAction>>,
     /// Password or key passphrase. Never sent to the frontend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
     /// Pasted private-key text (KeyText auth). Never sent to the frontend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_text: Option<String>,
+}
+
+/// A named command that can be run on the server in one click (e.g. "deploy").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnAction {
+    pub name: String,
+    pub command: String,
 }
 
 impl Connection {
@@ -111,6 +122,7 @@ mod tests {
             favorite: false,
             color: None,
             startup_commands: None,
+            actions: None,
             secret: Some("hunter2".into()),
             key_text: None,
         }

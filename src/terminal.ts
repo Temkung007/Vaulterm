@@ -132,6 +132,8 @@ export class TerminalSession {
   private onZoom?: (delta: number | "reset") => void;
 
   private body: HTMLDivElement;
+  /** A command to run once, after connect + startup commands (quick actions). */
+  private runOnConnect?: string;
   private searchBar?: HTMLDivElement;
   private searchInput?: HTMLInputElement;
   private searchCount?: HTMLSpanElement;
@@ -147,10 +149,16 @@ export class TerminalSession {
    *  connect can't steal keyboard focus from a pane the user switched to. */
   isActive?: () => boolean;
 
-  constructor(connection: Connection, sessionId: string, prefs?: TerminalPrefs) {
+  constructor(
+    connection: Connection,
+    sessionId: string,
+    prefs?: TerminalPrefs,
+    runOnConnect?: string,
+  ) {
     this.connection = connection;
     this.sessionId = sessionId;
     this.onZoom = prefs?.onZoom;
+    this.runOnConnect = runOnConnect;
 
     this.element = document.createElement("div");
     this.element.className = "term-pane";
@@ -346,16 +354,18 @@ export class TerminalSession {
     this.focusIfActive();
   }
 
-  /** Run the connection's startup commands once the shell is ready. */
+  /** Run the connection's startup commands (and any one-click action command)
+   *  once the shell is ready. The action runs after the startup commands so
+   *  prep like `cd /project` applies first. */
   private runStartupCommands(): void {
-    const cmds = this.connection.startupCommands?.trim();
-    if (!cmds) return;
-    const text =
-      cmds
-        .split(/\r?\n/)
-        .map((l) => l.trimEnd())
-        .filter(Boolean)
-        .join("\n") + "\n";
+    const lines: string[] = [];
+    const push = (s?: string) => {
+      if (s?.trim()) lines.push(...s.split(/\r?\n/).map((l) => l.trimEnd()).filter(Boolean));
+    };
+    push(this.connection.startupCommands ?? undefined);
+    push(this.runOnConnect);
+    if (!lines.length) return;
+    const text = lines.join("\n") + "\n";
     // Let the shell draw its first prompt before sending.
     setTimeout(() => this.sendText(text), 400);
   }
