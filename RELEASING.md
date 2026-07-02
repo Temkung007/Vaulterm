@@ -20,13 +20,21 @@ signed NSIS installer, verifies the signature against the public key baked into
 1. Bump the version in all three, keeping them identical:
    `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`.
 
-2. Build with the signing key in the environment (PowerShell):
+2. Build with the signing key in the environment. **Use Git Bash, not PowerShell** —
+   the key has no password, and PowerShell silently drops empty-string env vars
+   (`$env:X = ""` unsets it), so Tauri never receives the empty password and hangs
+   at a `Decrypting updater signing key, expect a prompt for password` prompt. Bash
+   (and GitHub Actions) preserve empty env vars, so signing runs non-interactively:
 
-   ```powershell
-   $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content "$HOME\.tauri\vaulterm.key" -Raw
-   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""   # empty — the key has no password
+   ```bash
+   export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/vaulterm.key)"
+   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # empty — the key has no password
    npm run tauri build
    ```
+
+   (Alternatively, give the key a password with `pnpm tauri signer generate -p …` so
+   the env var is non-empty and any shell works — then update the pubkey in
+   `tauri.conf.json`.)
 
    Produces, under `src-tauri/target/release/bundle/nsis/`:
    - `Vaulterm_<ver>_x64-setup.exe` — the installer the updater downloads
