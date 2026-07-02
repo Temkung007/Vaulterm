@@ -12,6 +12,7 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
+use crate::mcp;
 use crate::sftp::{self, FileEntry, SftpConn};
 use crate::ssh::{self, SessionInput, SshConnectError};
 use crate::store::{Connection, KnownHost, Settings, Snippet};
@@ -21,7 +22,7 @@ use crate::AppState;
 
 /// Build the hop chain [jump…, target] for `target_id`, resolving each hop's
 /// secret from the vault; errors on a jump-host cycle.
-fn resolve_chain(vault: &Vault, target_id: &str) -> Result<Vec<ssh::Hop>, String> {
+pub(crate) fn resolve_chain(vault: &Vault, target_id: &str) -> Result<Vec<ssh::Hop>, String> {
     let conns = vault.read(|d| d.connections.clone()).map_err(|e| e.to_string())?;
     let mut chain: Vec<Connection> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -627,4 +628,98 @@ pub async fn tunnel_stop_all(state: State<'_, AppState>) -> Result<(), String> {
         t.graceful_cancel().await;
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// MCP server (AI access to saved connections)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpStatus {
+    pub enabled: bool,
+    pub running: bool,
+    pub port: u16,
+    pub token: Option<String>,
+}
+
+fn mcp_snapshot(state: &AppState) -> Result<McpStatus, String> {
+    let (enabled, token) = state
+        .vault
+        .read(|d| (d.settings.mcp_enabled, d.settings.mcp_token.clone()))
+        .map_err(|e| e.to_string())?;
+    Ok(McpStatus {
+        enabled,
+        running: state.mcp.lock().unwrap().is_some(),
+        port: mcp::MCP_PORT,
+        token,
+    })
+}
+
+#[tauri::command]
+pub fn mcp_status(state: State<'_, AppState>) -> Result<McpStatus, String> {
+    mcp_snapshot(&state)
+}
+
+/// Enable/disable the MCP server: persist the choice and (re)start or stop it.
+/// A token is generated on first enable.
+#[tauri::command]
+pub async fn mcp_set_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<McpStatus, String> {
+    let token = state
+        .vault
+        .write(|d| {
+            d.settings.mcp_enabled = enabled;
+            if d.settings.mcp_token.is_none() {
+                d.settings.mcp_token = Some(mcp::generate_token());
+            }
+            d.settings.mcp_token.clone().unwrap()
+        })
+        .map_err(|e| e.to_string())?;
+
+    // Stop any existing server (drop the lock before awaiting).
+    let old = state.mcp.lock().unwrap().take();
+    if let Some(h) = old {
+        h.stop();
+    }
+    if enabled {
+        let handle = mcp::start(app, token).await?;
+        *state.mcp.lock().unwrap() = Some(handle);
+    }
+    mcp_snapshot(&state)
+}
+
+/// Start the MCP server if it's enabled in settings (called after unlock).
+#[tauri::command]
+pub async fn mcp_autostart(app: AppHandle, state: State<'_, AppState>) -> Result<McpStatus, String> {
+    let (enabled, token) = state
+        .vault
+        .read(|d| (d.settings.mcp_enabled, d.settings.mcp_token.clone()))
+        .map_err(|e| e.to_string())?;
+    let need_start = enabled && state.mcp.lock().unwrap().is_none();
+    if need_start {
+        let handle = mcp::start(app, token.unwrap_or_else(mcp::generate_token)).await?;
+        *state.mcp.lock().unwrap() = Some(handle);
+    }
+    mcp_snapshot(&state)
+}
+
+/// Stop the MCP server without changing the enabled setting (called on lock).
+#[tauri::command]
+pub fn mcp_stop(state: State<'_, AppState>) {
+    let old = state.mcp.lock().unwrap().take();
+    if let Some(h) = old {
+        h.stop();
+    }
+}
+
+/// Answer a pending dangerous-tool confirmation raised by the MCP server.
+#[tauri::command]
+pub fn mcp_confirm_respond(state: State<'_, AppState>, id: String, allow: bool) {
+    if let Some(tx) = state.mcp_pending.lock().unwrap().remove(&id) {
+        let _ = tx.send(allow);
+    }
 }

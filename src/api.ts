@@ -247,6 +247,42 @@ export function tunnelStopAll(): Promise<void> {
   return invoke("tunnel_stop_all");
 }
 
+// ---- MCP server (AI access) -------------------------------------------------
+
+export interface McpStatus {
+  enabled: boolean;
+  running: boolean;
+  port: number;
+  token?: string | null;
+}
+export function mcpStatus(): Promise<McpStatus> {
+  return invoke("mcp_status");
+}
+export function mcpSetEnabled(enabled: boolean): Promise<McpStatus> {
+  return invoke("mcp_set_enabled", { enabled });
+}
+export function mcpAutostart(): Promise<McpStatus> {
+  return invoke("mcp_autostart");
+}
+export function mcpStop(): Promise<void> {
+  return invoke("mcp_stop");
+}
+export function mcpConfirmRespond(id: string, allow: boolean): Promise<void> {
+  return invoke("mcp_confirm_respond", { id, allow });
+}
+
+/** A dangerous MCP tool call awaiting the user's approval. */
+export interface McpConfirm {
+  id: string;
+  connection: string;
+  action: string;
+  detail: string;
+}
+/** Fires when the MCP server needs approval for run_command / write_file. */
+export function onMcpConfirm(cb: (c: McpConfirm) => void): Promise<UnlistenFn> {
+  return listen<McpConfirm>("mcp-confirm", (e) => cb(e.payload));
+}
+
 // ---- Vault backup / restore -------------------------------------------------
 
 export function vaultExport(destPath: string): Promise<void> {

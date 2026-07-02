@@ -15,6 +15,24 @@
         <button id="update-banner-dismiss" type="button" class="icon-btn" title="Dismiss">✕</button>
       </div>
 
+      <!-- MCP: approve a dangerous AI tool call -->
+      <div id="mcp-confirm-backdrop" class="modal-backdrop hidden">
+        <div class="modal">
+          <div class="dash__head">
+            <h2 class="modal__title">🤖 Approve AI action</h2>
+          </div>
+          <p class="form__note">
+            An MCP client wants to <strong><span id="mcp-confirm-action">run a command</span></strong>
+            on <strong><span id="mcp-confirm-conn"></span></strong>. Allow it?
+          </p>
+          <pre id="mcp-confirm-detail" class="mcp-confirm__detail"></pre>
+          <div class="form__actions">
+            <button id="mcp-confirm-deny" type="button" class="btn btn--ghost">Deny</button>
+            <button id="mcp-confirm-allow" type="button" class="btn btn--primary">Allow</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Sidebar: saved SSH connections -->
       <aside id="sidebar">
         <header class="sidebar__header">
@@ -376,6 +394,34 @@
             Current version <span id="update-version">—</span>. Updates are downloaded from GitHub
             Releases and verified with a signature before installing.
           </p>
+
+          <hr class="form__sep" />
+
+          <h3 class="form__subtitle">MCP server <em>(AI access)</em></h3>
+          <label class="form__check">
+            <input id="mcp-enabled" type="checkbox" />
+            <span>Let an MCP client (Claude Desktop / Claude Code) use your saved connections</span>
+          </label>
+          <p id="mcp-status" class="form__note"></p>
+          <div id="mcp-details" class="hidden">
+            <label class="form__row">
+              <span>Endpoint</span>
+              <input id="mcp-url" type="text" readonly />
+            </label>
+            <label class="form__row">
+              <span>Token <em>(bearer)</em></span>
+              <input id="mcp-token" type="text" readonly />
+            </label>
+            <div class="backup-actions">
+              <button id="mcp-copy-cli" type="button" class="btn btn--ghost">Copy Claude Code command</button>
+              <button id="mcp-copy-json" type="button" class="btn btn--ghost">Copy Claude Desktop config</button>
+            </div>
+            <p class="form__note">
+              Serves on <code>127.0.0.1</code> only, while the vault is unlocked, and requires this
+              token. Read tools run directly; <strong>run_command / write_file ask you to approve each
+              call</strong> in this window.
+            </p>
+          </div>
 
           <p id="set-msg" class="form__error hidden"></p>
 

@@ -102,6 +102,13 @@ pub struct Settings {
     /// Lock the vault after this many minutes of inactivity (0 = never).
     #[serde(default)]
     pub auto_lock_minutes: u32,
+    /// Whether the local MCP server (AI access to saved connections) is enabled.
+    #[serde(default)]
+    pub mcp_enabled: bool,
+    /// Bearer token the MCP client must present. Generated on first enable and
+    /// persisted so the client config stays valid across launches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_token: Option<String>,
 }
 
 #[cfg(test)]

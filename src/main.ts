@@ -556,6 +556,8 @@ async function enterApp(): Promise<void> {
   }
   // Quietly check for a newer release; show a banner if one is available.
   void maybeShowUpdateBanner();
+  // Start the MCP server if the user has enabled it.
+  void api.mcpAutostart().catch(() => {});
 }
 
 async function handleLockSubmit(e: SubmitEvent): Promise<void> {
@@ -584,6 +586,8 @@ async function lockApp(): Promise<void> {
   tunnels.hideForLock();
   actionsPanel.hideForLock();
   $("update-banner").classList.add("hidden");
+  $("mcp-confirm-backdrop").classList.add("hidden");
+  void api.mcpStop().catch(() => {});
   void api.tunnelStopAll().catch(() => {});
   // Dispose every session directly — going through closeSession would re-show
   // and re-focus soon-to-be-disposed panes on each iteration.
@@ -658,6 +662,7 @@ function openSettings(): void {
   void getVersion()
     .then((v) => ($("update-version").textContent = `v${v}`))
     .catch(() => {});
+  void refreshMcpSettings();
   settingsBackdropEl.classList.remove("hidden");
 }
 
@@ -725,6 +730,79 @@ async function maybeShowUpdateBanner(): Promise<void> {
   } catch {
     /* offline or no manifest — stay quiet */
   }
+}
+
+// ---- MCP server (AI access) -------------------------------------------------
+
+function renderMcpSettings(st: api.McpStatus): void {
+  $<HTMLInputElement>("mcp-enabled").checked = st.enabled;
+  $("mcp-details").classList.toggle("hidden", !st.enabled);
+  $<HTMLInputElement>("mcp-url").value = `http://127.0.0.1:${st.port}/mcp`;
+  $<HTMLInputElement>("mcp-token").value = st.token ?? "";
+  $("mcp-status").textContent = st.enabled
+    ? st.running
+      ? `Running on 127.0.0.1:${st.port}`
+      : "Enabled (starts when the vault is unlocked)"
+    : "Off";
+}
+
+async function refreshMcpSettings(): Promise<void> {
+  try {
+    renderMcpSettings(await api.mcpStatus());
+  } catch {
+    /* vault locked — leave as-is */
+  }
+}
+
+async function handleMcpToggle(): Promise<void> {
+  const enabled = $<HTMLInputElement>("mcp-enabled").checked;
+  $("mcp-status").textContent = enabled ? "Starting…" : "Stopping…";
+  try {
+    renderMcpSettings(await api.mcpSetEnabled(enabled));
+  } catch (e) {
+    $("mcp-status").textContent = `Failed: ${typeof e === "string" ? e : String(e)}`;
+    $<HTMLInputElement>("mcp-enabled").checked = !enabled;
+  }
+}
+
+function mcpSnippets(): { cli: string; json: string } {
+  const url = $<HTMLInputElement>("mcp-url").value;
+  const token = $<HTMLInputElement>("mcp-token").value;
+  const cli = `claude mcp add --transport http vaulterm ${url} --header "Authorization: Bearer ${token}"`;
+  const json = JSON.stringify(
+    { mcpServers: { vaulterm: { type: "http", url, headers: { Authorization: `Bearer ${token}` } } } },
+    null,
+    2,
+  );
+  return { cli, json };
+}
+
+async function copyToClipboard(text: string, btn: HTMLButtonElement): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    const prev = btn.textContent;
+    btn.textContent = "Copied ✓";
+    window.setTimeout(() => (btn.textContent = prev), 1500);
+  } catch {
+    /* clipboard unavailable */
+  }
+}
+
+let mcpConfirmId: string | null = null;
+
+function showMcpConfirm(c: api.McpConfirm): void {
+  mcpConfirmId = c.id;
+  $("mcp-confirm-action").textContent = c.action === "write_file" ? "write a file" : "run a command";
+  $("mcp-confirm-conn").textContent = c.connection;
+  $("mcp-confirm-detail").textContent = c.detail;
+  $("mcp-confirm-backdrop").classList.remove("hidden");
+}
+
+async function respondMcpConfirm(allow: boolean): Promise<void> {
+  const id = mcpConfirmId;
+  mcpConfirmId = null;
+  $("mcp-confirm-backdrop").classList.add("hidden");
+  if (id) await api.mcpConfirmRespond(id, allow).catch(() => {});
 }
 
 function closeSettings(): void {
@@ -823,6 +901,16 @@ function bindUi(): void {
   $("vault-export").addEventListener("click", () => void handleExportVault());
   $("vault-import").addEventListener("click", () => void handleImportVault());
   $("update-check").addEventListener("click", () => void handleCheckUpdates());
+  $("mcp-enabled").addEventListener("change", () => void handleMcpToggle());
+  $("mcp-copy-cli").addEventListener("click", (e) =>
+    void copyToClipboard(mcpSnippets().cli, e.currentTarget as HTMLButtonElement),
+  );
+  $("mcp-copy-json").addEventListener("click", (e) =>
+    void copyToClipboard(mcpSnippets().json, e.currentTarget as HTMLButtonElement),
+  );
+  $("mcp-confirm-allow").addEventListener("click", () => void respondMcpConfirm(true));
+  $("mcp-confirm-deny").addEventListener("click", () => void respondMcpConfirm(false));
+  void api.onMcpConfirm((c) => showMcpConfirm(c));
   splitRightBtn.addEventListener("click", () => void splitActive("row"));
   splitDownBtn.addEventListener("click", () => void splitActive("col"));
   setTermThemeEl.replaceChildren(

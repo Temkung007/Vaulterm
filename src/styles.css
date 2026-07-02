@@ -1093,6 +1093,40 @@ textarea:focus-visible {
   }
 }
 
+/* ---------- MCP server ---------- */
+.form__check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.form__check input {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+#mcp-url,
+#mcp-token {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.mcp-confirm__detail {
+  max-height: 240px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin: 8px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
 /* ---------- Remote file browser + editor ---------- */
 .files-backdrop {
   position: fixed;

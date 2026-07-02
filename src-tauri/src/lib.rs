@@ -1,4 +1,5 @@
 mod commands;
+mod mcp;
 mod sftp;
 mod ssh;
 mod store;
@@ -27,6 +28,10 @@ pub struct AppState {
     pub sftp_conns: Mutex<HashMap<String, Arc<SftpConn>>>,
     /// Tunnel id -> running port-forward.
     pub tunnels: Mutex<HashMap<String, Tunnel>>,
+    /// The running local MCP server (AI access), if enabled + vault unlocked.
+    pub mcp: Mutex<Option<mcp::McpHandle>>,
+    /// Pending MCP dangerous-tool confirmations awaiting the user's decision.
+    pub mcp_pending: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -72,6 +77,11 @@ pub fn run() {
             commands::tunnel_stop,
             commands::tunnel_list,
             commands::tunnel_stop_all,
+            commands::mcp_status,
+            commands::mcp_set_enabled,
+            commands::mcp_autostart,
+            commands::mcp_stop,
+            commands::mcp_confirm_respond,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
