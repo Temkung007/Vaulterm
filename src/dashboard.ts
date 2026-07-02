@@ -48,22 +48,14 @@ const STATS: Stat[] = [
 
 function parseDashboard(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
-  let key = "";
-  let buf: string[] = [];
-  const flush = () => {
-    if (key) out[key] = buf.join("\n").trim();
-    buf = [];
-  };
-  for (const line of raw.split(/\r?\n/)) {
-    const m = line.match(/^@@(\w+)@@$/);
-    if (m) {
-      flush();
-      key = m[1];
-    } else {
-      buf.push(line);
-    }
+  // Split on the @@KEY@@ markers wherever they appear. A value may not end in a
+  // newline (e.g. the memory `awk printf`), which glues the next marker onto the
+  // value line — so we can't rely on a marker being alone on its own line.
+  // split() yields [preamble, key1, value1, key2, value2, …].
+  const parts = raw.split(/@@(\w+)@@/);
+  for (let i = 1; i + 1 < parts.length; i += 2) {
+    out[parts[i]] = parts[i + 1].trim();
   }
-  flush();
   return out;
 }
 
