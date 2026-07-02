@@ -7,7 +7,9 @@ import { CommandPalette } from "./snippets";
 import { FilesBrowser } from "./files";
 import { DashboardPanel } from "./dashboard";
 import { TunnelsPanel } from "./tunnels";
+import { checkForUpdates, type UpdateStatus } from "./updater";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { getVersion } from "@tauri-apps/api/app";
 
 // ---- DOM refs ---------------------------------------------------------------
 
@@ -625,7 +627,42 @@ function openSettings(): void {
   cpNew2El.value = "";
   setFontSizeEl.value = String(termFontSize);
   setTermThemeEl.value = termTheme;
+  $("update-status").textContent = "";
+  void getVersion()
+    .then((v) => ($("update-version").textContent = `v${v}`))
+    .catch(() => {});
   settingsBackdropEl.classList.remove("hidden");
+}
+
+function renderUpdateStatus(s: UpdateStatus): void {
+  const el = $("update-status");
+  switch (s.kind) {
+    case "checking":
+      el.textContent = "Checking…";
+      break;
+    case "uptodate":
+      el.textContent = "You're on the latest version.";
+      break;
+    case "downloading":
+      el.textContent = s.pct != null ? `Downloading… ${s.pct}%` : "Downloading…";
+      break;
+    case "installed":
+      el.textContent = "Installed — relaunching…";
+      break;
+    case "error":
+      el.textContent = `Update failed: ${s.message}`;
+      break;
+  }
+}
+
+async function handleCheckUpdates(): Promise<void> {
+  const btn = $<HTMLButtonElement>("update-check");
+  btn.disabled = true;
+  try {
+    await checkForUpdates(renderUpdateStatus);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function closeSettings(): void {
@@ -716,6 +753,7 @@ function bindUi(): void {
   $("cp-change").addEventListener("click", () => void handleChangePassword());
   $("vault-export").addEventListener("click", () => void handleExportVault());
   $("vault-import").addEventListener("click", () => void handleImportVault());
+  $("update-check").addEventListener("click", () => void handleCheckUpdates());
   splitRightBtn.addEventListener("click", () => void splitActive("row"));
   splitDownBtn.addEventListener("click", () => void splitActive("col"));
   setTermThemeEl.replaceChildren(
