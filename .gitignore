@@ -10,3 +10,7 @@ src-tauri/gen/schemas/
 *.log
 .DS_Store
 Thumbs.db
+
+# Never commit exported vault backups (encrypted, but private)
+*vault-backup*.json
+vaulterm-vault-backup.json
