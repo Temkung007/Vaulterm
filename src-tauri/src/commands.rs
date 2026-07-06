@@ -13,7 +13,7 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::mcp;
-use crate::sftp::{self, FileEntry, SftpConn};
+use crate::sftp::{self, FileContent, FileEntry, SftpConn, WriteResult};
 use crate::ssh::{self, SessionInput, SshConnectError};
 use crate::store::{Connection, KnownHost, Settings, Snippet};
 use crate::tunnel::{self, Tunnel, TunnelInfo};
@@ -398,7 +398,7 @@ pub async fn sftp_read(
     state: State<'_, AppState>,
     connection_id: String,
     path: String,
-) -> Result<String, String> {
+) -> Result<FileContent, String> {
     get_sftp(state.inner(), &connection_id).await?.read(&path).await
 }
 
@@ -408,10 +408,13 @@ pub async fn sftp_write(
     connection_id: String,
     path: String,
     content: String,
-) -> Result<(), String> {
+    force: bool,
+    expected_mtime: Option<u32>,
+    expected_size: Option<u64>,
+) -> Result<WriteResult, String> {
     get_sftp(state.inner(), &connection_id)
         .await?
-        .write(&path, &content)
+        .write(&path, &content, force, expected_mtime, expected_size)
         .await
 }
 

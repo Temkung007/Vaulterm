@@ -1,5 +1,7 @@
 import { EditorView, basicSetup } from "codemirror";
-import { EditorState, Compartment, type Extension } from "@codemirror/state";
+import { keymap } from "@codemirror/view";
+import { EditorState, Compartment, Prec, type Extension } from "@codemirror/state";
+import { openSearchPanel, gotoLine } from "@codemirror/search";
 import { StreamLanguage } from "@codemirror/language";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { json } from "@codemirror/lang-json";
@@ -72,37 +74,55 @@ export class CodeEditor {
   private view: EditorView;
   private language = new Compartment();
   private readOnlyC = new Compartment();
+  private wrapC = new Compartment();
   private suppress = false;
+  /** Word-wrap is remembered across files (a per-editor preference). */
+  private wrap = false;
+  private onChange: () => void;
+  private onSave?: () => void;
 
-  constructor(parent: HTMLElement, onChange: () => void) {
-    this.view = new EditorView({
-      parent,
-      state: EditorState.create({
-        doc: "",
-        extensions: [
-          basicSetup,
-          oneDark,
-          this.language.of([]),
-          this.readOnlyC.of(EditorState.readOnly.of(true)),
-          EditorView.updateListener.of((u) => {
-            if (u.docChanged && !this.suppress) onChange();
-          }),
-          EditorView.theme({
-            "&": { height: "100%" },
-            ".cm-scroller": { fontFamily: '"Cascadia Code", "JetBrains Mono", Consolas, monospace' },
-          }),
-        ],
-      }),
+  constructor(parent: HTMLElement, onChange: () => void, onSave?: () => void) {
+    this.onChange = onChange;
+    this.onSave = onSave;
+    this.view = new EditorView({ parent, state: this.makeState("", "", true) });
+  }
+
+  /**
+   * Build a fresh EditorState. Loading a file swaps in a brand-new state (see
+   * `setContent`) rather than editing the current doc, which gives every file
+   * its own empty undo history — otherwise Ctrl+Z after opening file B could
+   * resurrect (and then save) file A's content.
+   */
+  private makeState(doc: string, path: string, readOnly: boolean): EditorState {
+    return EditorState.create({
+      doc,
+      extensions: [
+        // Runs before basicSetup's keymap and the webview's own Ctrl+S.
+        Prec.highest(
+          keymap.of([
+            { key: "Mod-s", preventDefault: true, run: () => (this.onSave?.(), true) },
+          ]),
+        ),
+        basicSetup,
+        oneDark,
+        this.language.of(langFor(path)),
+        this.readOnlyC.of(EditorState.readOnly.of(readOnly)),
+        this.wrapC.of(this.wrap ? EditorView.lineWrapping : []),
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged && !this.suppress) this.onChange();
+        }),
+        EditorView.theme({
+          "&": { height: "100%" },
+          ".cm-scroller": { fontFamily: '"Cascadia Code", "JetBrains Mono", Consolas, monospace' },
+        }),
+      ],
     });
   }
 
-  /** Replace the whole document + switch language, without firing onChange. */
+  /** Load a file: replace the document + language with a fresh, editable state. */
   setContent(text: string, path: string): void {
     this.suppress = true;
-    this.view.dispatch({
-      changes: { from: 0, to: this.view.state.doc.length, insert: text },
-      effects: this.language.reconfigure(langFor(path)),
-    });
+    this.view.setState(this.makeState(text, path, false));
     this.suppress = false;
   }
 
@@ -116,12 +136,28 @@ export class CodeEditor {
 
   clear(): void {
     this.suppress = true;
-    this.view.dispatch({
-      changes: { from: 0, to: this.view.state.doc.length, insert: "" },
-      effects: this.language.reconfigure([]),
-    });
+    this.view.setState(this.makeState("", "", true));
     this.suppress = false;
-    this.setReadOnly(true);
+  }
+
+  /** Open CodeMirror's find/replace panel. */
+  openFind(): void {
+    openSearchPanel(this.view);
+    this.view.focus();
+  }
+
+  /** Open the go-to-line prompt. */
+  goToLine(): void {
+    gotoLine(this.view);
+  }
+
+  /** Toggle soft word-wrap; returns the new state. Persists across files. */
+  toggleWrap(): boolean {
+    this.wrap = !this.wrap;
+    this.view.dispatch({
+      effects: this.wrapC.reconfigure(this.wrap ? EditorView.lineWrapping : []),
+    });
+    return this.wrap;
   }
 
   focus(): void {

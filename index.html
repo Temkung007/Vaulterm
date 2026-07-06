@@ -227,17 +227,41 @@
         </header>
         <div class="files__pathbar">
           <button id="files-up" class="btn btn--ghost" title="Up one level">⬆</button>
-          <input id="files-path" class="files__path" readonly />
+          <input
+            id="files-path"
+            class="files__path"
+            spellcheck="false"
+            autocapitalize="off"
+            autocomplete="off"
+            placeholder="/path — press Enter to go"
+          />
+          <button id="files-newfile" class="btn btn--ghost" title="New file">＋ File</button>
           <button id="files-newfolder" class="btn btn--ghost" title="New folder">＋ Folder</button>
           <button id="files-upload" class="btn btn--ghost" title="Upload files here">↥ Upload</button>
           <button id="files-refresh" class="btn btn--ghost" title="Refresh">⟳</button>
+        </div>
+        <div class="files__subbar">
+          <nav id="files-breadcrumbs" class="files__breadcrumbs"></nav>
+          <input
+            id="files-filter"
+            class="files__filter"
+            spellcheck="false"
+            autocapitalize="off"
+            autocomplete="off"
+            placeholder="Filter…"
+          />
         </div>
         <div class="files__body">
           <ul id="files-list" class="files__list"></ul>
           <div class="files__editor">
             <div class="files__editor-head">
               <span id="files-openpath" class="files__openpath">No file open</span>
-              <button id="files-save" class="btn btn--primary" disabled>Save</button>
+              <div class="files__editor-tools">
+                <button id="files-find" class="icon-btn" title="Find / Replace (Ctrl+F)">🔍</button>
+                <button id="files-goto" class="icon-btn" title="Go to line">↦</button>
+                <button id="files-wrap" class="icon-btn" title="Toggle word wrap">↩</button>
+                <button id="files-save" class="btn btn--primary" disabled>Save</button>
+              </div>
             </div>
             <div id="files-editor" class="files__editor-cm"></div>
           </div>

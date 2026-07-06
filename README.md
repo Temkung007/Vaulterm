@@ -12,9 +12,13 @@ A small desktop **SSH terminal** that remembers your connections. Built with
 - ⚡ **Command palette** (`Ctrl+K`) with a built-in **Ubuntu** snippet pack
   (apt, systemd, ufw, journalctl, docker…) plus your own custom snippets;
   `{placeholder}` prompts; inserts into the terminal for you to review & run
-- 📁 **Remote file browser + editor** over SFTP — browse directories, open a
-  file in the built-in editor, and **save only after a confirmation prompt**
-  (no accidental overwrites)
+- 📁 **Remote file browser + editor** over SFTP — browse directories (with
+  clickable breadcrumbs, a type-a-path bar, and a per-folder filter), create
+  files/folders, upload/download, rename, delete, and edit in a built-in
+  CodeMirror editor with syntax highlighting, find/replace (`Ctrl+F`),
+  go-to-line, and word-wrap. **Save with `Ctrl+S`**; the first save of a file is
+  confirmed, and if the file **changed on the server** since you opened it the
+  save is blocked until you explicitly override it (no silent lost updates)
 - 🖥️ Real interactive shell over SSH with a proper PTY (vim, htop, colors, resize)
 - 🗂️ Multiple sessions in tabs
 - 💾 Connection metadata persisted as JSON in your per-user config dir

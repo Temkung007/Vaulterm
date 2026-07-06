@@ -11,6 +11,7 @@ import { ActionsPanel } from "./actions";
 import { checkForUpdates, fetchUpdate, installUpdate, type UpdateStatus, type Update } from "./updater";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 // ---- DOM refs ---------------------------------------------------------------
 
@@ -977,8 +978,27 @@ function bindUi(): void {
   });
 }
 
+/** Warn before closing the window while the file editor has unsaved changes. */
+function installCloseGuard(): void {
+  try {
+    getCurrentWindow()
+      .onCloseRequested((event) => {
+        if (
+          filesBrowser.isDirty &&
+          !confirm("You have unsaved changes in the file editor.\n\nClose the app anyway?")
+        ) {
+          event.preventDefault();
+        }
+      })
+      .catch((e) => console.error("close guard registration failed", e));
+  } catch (e) {
+    console.error("close guard registration failed", e);
+  }
+}
+
 async function init(): Promise<void> {
   bindUi();
+  installCloseGuard();
   try {
     const status = await api.vaultStatus();
     if (status.unlocked) await enterApp();

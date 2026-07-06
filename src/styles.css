@@ -1185,6 +1185,63 @@ textarea:focus-visible {
   font-size: 12px;
   outline: none;
 }
+.files__path:focus {
+  border-color: var(--accent);
+}
+.files__subbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.files__breadcrumbs {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+.files__crumb {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.files__crumb:hover {
+  color: var(--accent-hover);
+  background: var(--bg-elev-2);
+}
+.files__crumb-sep {
+  color: var(--text-faint);
+  font-size: 12px;
+  user-select: none;
+}
+.files__filter {
+  width: 200px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 5px 9px;
+  font-size: 12px;
+  outline: none;
+}
+.files__filter:focus {
+  border-color: var(--accent);
+}
+.files__empty {
+  padding: 12px 10px;
+  color: var(--text-faint);
+  font-size: 12px;
+  text-align: center;
+}
 .files__body {
   flex: 1;
   display: grid;
@@ -1254,6 +1311,16 @@ textarea:focus-visible {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.files__editor-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.icon-btn--active {
+  color: var(--accent);
+  background: var(--bg-elev-2);
 }
 .files__editor-cm {
   flex: 1;

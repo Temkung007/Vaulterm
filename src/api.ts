@@ -173,7 +173,24 @@ export function onSessionClosed(cb: (sessionId: string) => void): Promise<Unlist
 export interface FileEntry {
   name: string;
   isDir: boolean;
+  /** The entry itself is a symlink (its target may still be a directory). */
+  isSymlink: boolean;
   size: number;
+  /** Last-modified time (unix seconds), if the server reports it. */
+  mtime: number | null;
+}
+
+/** A file's text plus the metadata used to detect external edits on save. */
+export interface FileContent {
+  content: string;
+  mtime: number | null;
+  size: number;
+}
+
+/** Fresh metadata returned after a write, to advance the optimistic-lock baseline. */
+export interface WriteResult {
+  mtime: number | null;
+  size: number | null;
 }
 
 /** Absolute path of the starting directory (home). */
@@ -183,12 +200,33 @@ export function sftpHome(connectionId: string): Promise<string> {
 export function sftpList(connectionId: string, path: string): Promise<FileEntry[]> {
   return invoke("sftp_list", { connectionId, path });
 }
-/** Read a file as UTF-8 text (rejects binary / oversized files). */
-export function sftpRead(connectionId: string, path: string): Promise<string> {
+/** Read a file as UTF-8 text + mtime (rejects binary / oversized files). */
+export function sftpRead(connectionId: string, path: string): Promise<FileContent> {
   return invoke("sftp_read", { connectionId, path });
 }
-export function sftpWrite(connectionId: string, path: string, content: string): Promise<void> {
-  return invoke("sftp_write", { connectionId, path, content });
+/**
+ * Overwrite a file with an optimistic lock. Pass the mtime + size the file had
+ * when it was opened; if the server copy changed since, the write rejects with
+ * "REMOTE_CHANGED". Set `force` to skip the check (new files, or the explicit
+ * user override after a REMOTE_CHANGED prompt). Resolves to the file's fresh
+ * mtime + size so the caller can advance its baseline for the next save.
+ */
+export function sftpWrite(
+  connectionId: string,
+  path: string,
+  content: string,
+  force: boolean,
+  expectedMtime: number | null,
+  expectedSize: number | null,
+): Promise<WriteResult> {
+  return invoke("sftp_write", {
+    connectionId,
+    path,
+    content,
+    force,
+    expectedMtime,
+    expectedSize,
+  });
 }
 export function sftpClose(connectionId: string): Promise<void> {
   return invoke("sftp_close", { connectionId });

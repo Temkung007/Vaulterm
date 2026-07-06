@@ -16,6 +16,15 @@ use crate::store::KnownHost;
 /// Largest file we'll load into the in-app editor.
 const MAX_EDIT_BYTES: u64 = 2_000_000;
 
+/// Join a POSIX directory path and a child name (SFTP is always `/`-separated).
+fn join_path(dir: &str, name: &str) -> String {
+    if dir == "/" {
+        format!("/{name}")
+    } else {
+        format!("{}/{}", dir.trim_end_matches('/'), name)
+    }
+}
+
 /// One live SFTP connection. The handle (and any jump-host handles) are kept
 /// alive for the lifetime of the session.
 pub struct SftpConn {
@@ -29,7 +38,29 @@ pub struct SftpConn {
 pub struct FileEntry {
     pub name: String,
     pub is_dir: bool,
+    /// The entry itself is a symlink (independent of what it points at).
+    pub is_symlink: bool,
     pub size: u64,
+    /// Last-modified time (seconds since epoch), if the server reports it.
+    pub mtime: Option<u32>,
+}
+
+/// A file's text plus the metadata the editor needs to detect external edits.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileContent {
+    pub content: String,
+    /// mtime + size at read time — the baseline for the optimistic-lock on save.
+    pub mtime: Option<u32>,
+    pub size: u64,
+}
+
+/// Metadata reported back after a write so the caller can refresh its baseline.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteResult {
+    pub mtime: Option<u32>,
+    pub size: Option<u64>,
 }
 
 /// Open a new SFTP connection through the given chain (authenticates + host-key
@@ -59,15 +90,34 @@ impl SftpConn {
     }
 
     /// List a directory: folders first, then files, case-insensitive by name.
+    ///
+    /// `read_dir` returns each entry's own (lstat) attributes, so a symlink to a
+    /// directory would list as a plain file and be un-navigable. For symlinks we
+    /// do one follow-up `metadata` (which follows the link) to classify the
+    /// target; broken links stay as non-navigable files.
     pub async fn list(&self, path: &str) -> Result<Vec<FileEntry>, String> {
         let dir = self.session.read_dir(path).await.map_err(|e| e.to_string())?;
-        let mut entries: Vec<FileEntry> = dir
-            .map(|e| FileEntry {
-                name: e.file_name(),
-                is_dir: e.file_type().is_dir(),
-                size: e.metadata().size.unwrap_or(0),
-            })
-            .collect();
+        let mut entries: Vec<FileEntry> = Vec::new();
+        for e in dir {
+            let name = e.file_name();
+            let ft = e.file_type();
+            let is_symlink = ft.is_symlink();
+            let meta = e.metadata();
+            let mut is_dir = ft.is_dir();
+            let mut size = meta.size.unwrap_or(0);
+            let mut mtime = meta.mtime;
+            if is_symlink {
+                let target = join_path(path, &name);
+                if let Ok(tmeta) = self.session.metadata(target).await {
+                    is_dir = tmeta.file_type().is_dir();
+                    size = tmeta.size.unwrap_or(size);
+                    if mtime.is_none() {
+                        mtime = tmeta.mtime;
+                    }
+                }
+            }
+            entries.push(FileEntry { name, is_dir, is_symlink, size, mtime });
+        }
         entries.sort_by(|a, b| {
             b.is_dir
                 .cmp(&a.is_dir)
@@ -76,16 +126,18 @@ impl SftpConn {
         Ok(entries)
     }
 
-    /// Read a file as UTF-8 text. Rejects oversized or binary files.
-    pub async fn read(&self, path: &str) -> Result<String, String> {
-        if let Some(size) = self.session.metadata(path).await.map_err(|e| e.to_string())?.size {
-            if size > MAX_EDIT_BYTES {
-                return Err(format!(
-                    "file is too large to edit ({} KB, limit {} KB)",
-                    size / 1024,
-                    MAX_EDIT_BYTES / 1024
-                ));
-            }
+    /// Read a file as UTF-8 text plus its mtime/size. Rejects oversized or
+    /// binary files. The mtime is the baseline the editor stores so a later
+    /// save can detect that something else changed the file underneath it.
+    pub async fn read(&self, path: &str) -> Result<FileContent, String> {
+        let meta = self.session.metadata(path).await.map_err(|e| e.to_string())?;
+        let size = meta.size.unwrap_or(0);
+        if size > MAX_EDIT_BYTES {
+            return Err(format!(
+                "file is too large to edit ({} KB, limit {} KB)",
+                size / 1024,
+                MAX_EDIT_BYTES / 1024
+            ));
         }
         let mut file = self
             .session
@@ -94,11 +146,53 @@ impl SftpConn {
             .map_err(|e| e.to_string())?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf).await.map_err(|e| e.to_string())?;
-        String::from_utf8(buf).map_err(|_| "binary file — cannot edit as text".to_string())
+        let content =
+            String::from_utf8(buf).map_err(|_| "binary file — cannot edit as text".to_string())?;
+        Ok(FileContent { content, mtime: meta.mtime, size })
     }
 
     /// Overwrite a file with new UTF-8 text (truncates, creates if missing).
-    pub async fn write(&self, path: &str, content: &str) -> Result<(), String> {
+    ///
+    /// Optimistic lock: unless `force` is set, the current server file is
+    /// stat'd and the write is refused with `REMOTE_CHANGED` if its mtime or
+    /// size differs from the baseline the caller captured at open time — so an
+    /// external edit (deploy, log-rotate, a colleague) is never silently
+    /// clobbered. Using *both* mtime and size closes the same-second window that
+    /// mtime alone (1-second resolution) would miss, and still works on servers
+    /// that don't report mtime. If the file can't be stat'd but a baseline was
+    /// supplied, we fail closed (also `REMOTE_CHANGED`) rather than overwrite
+    /// blind. `force` skips every check — used for brand-new files and for the
+    /// explicit user override after a `REMOTE_CHANGED` prompt. Returns the fresh
+    /// mtime + size so the caller can advance its baseline for the next save.
+    pub async fn write(
+        &self,
+        path: &str,
+        content: &str,
+        force: bool,
+        expected_mtime: Option<u32>,
+        expected_size: Option<u64>,
+    ) -> Result<WriteResult, String> {
+        if !force {
+            match self.session.metadata(path).await {
+                Ok(meta) => {
+                    let mtime_changed =
+                        matches!((expected_mtime, meta.mtime), (Some(e), Some(c)) if e != c);
+                    let size_changed =
+                        matches!((expected_size, meta.size), (Some(e), Some(c)) if e != c);
+                    if mtime_changed || size_changed {
+                        return Err("REMOTE_CHANGED".to_string());
+                    }
+                }
+                Err(_) => {
+                    // Couldn't verify against the baseline we were given — fail
+                    // closed so the user gets the override prompt, not a silent
+                    // overwrite. (New files pass force=true and never land here.)
+                    if expected_mtime.is_some() || expected_size.is_some() {
+                        return Err("REMOTE_CHANGED".to_string());
+                    }
+                }
+            }
+        }
         let mut file = self
             .session
             .open_with_flags(
@@ -110,7 +204,12 @@ impl SftpConn {
         file.write_all(content.as_bytes()).await.map_err(|e| e.to_string())?;
         file.flush().await.map_err(|e| e.to_string())?;
         file.shutdown().await.map_err(|e| e.to_string())?;
-        Ok(())
+        // Best-effort: report the fresh mtime + size for the next lock check.
+        let meta = self.session.metadata(path).await.ok();
+        Ok(WriteResult {
+            mtime: meta.as_ref().and_then(|m| m.mtime),
+            size: meta.as_ref().and_then(|m| m.size),
+        })
     }
 
     /// Upload a local file to `remote` (streamed; handles binary + large files).
@@ -156,7 +255,7 @@ impl SftpConn {
     pub async fn remove_dir_recursive(&self, path: &str) -> Result<(), String> {
         let entries = self.session.read_dir(path).await.map_err(|e| e.to_string())?;
         for entry in entries {
-            let child = format!("{}/{}", path.trim_end_matches('/'), entry.file_name());
+            let child = join_path(path, &entry.file_name());
             if entry.file_type().is_dir() {
                 Box::pin(self.remove_dir_recursive(&child)).await?;
             } else {
