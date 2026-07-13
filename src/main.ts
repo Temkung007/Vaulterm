@@ -5,6 +5,9 @@ import { ConnectionModal, connectionSubtitle, type SavePayload } from "./connect
 import { TerminalSession, type SessionStatus, TERMINAL_THEMES, DEFAULT_THEME } from "./terminal";
 import { CommandPalette } from "./snippets";
 import { FilesBrowser } from "./files";
+import { PetPanel, Mascot, MONSTER_COLORS, type MonsterColor } from "./pet";
+import { toast } from "./toast";
+import { confettiBurst } from "./confetti";
 import { DashboardPanel } from "./dashboard";
 import { TunnelsPanel } from "./tunnels";
 import { ActionsPanel } from "./actions";
@@ -84,6 +87,9 @@ function loadCollapsedGroups(): string[] {
 const collapsedGroups = new Set<string>(loadCollapsedGroups());
 let termFontSize = Number(localStorage.getItem("vaulterm.fontSize")) || 14;
 let termTheme = localStorage.getItem("vaulterm.termTheme") || DEFAULT_THEME;
+// Fall back to the default if the saved theme no longer exists (e.g. the old
+// "Vaulterm Dark" from before the rebrand).
+if (!(termTheme in TERMINAL_THEMES)) termTheme = DEFAULT_THEME;
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -94,6 +100,19 @@ const el = <K extends keyof HTMLElementTagNameMap>(
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+};
+
+/** Clean single-weight line icons (24 grid) for the connection actions.
+ *  They inherit color via `currentColor`, so they tint on hover. */
+const SVG = (p: string): string =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+const ICON = {
+  status: SVG(`<path d="M3 12h3.5l2.4 7 4.6-14 2.4 7H21"/>`),
+  tunnel: SVG(`<path d="M4 8h13"/><path d="M14 5l3 3-3 3"/><path d="M20 16H7"/><path d="M10 13l-3 3 3 3"/>`),
+  run: SVG(`<path d="M8 5.5v13l11-6.5z"/>`),
+  files: SVG(`<path d="M3 7a2 2 0 0 1 2-2h3.4l2 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>`),
+  edit: SVG(`<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>`),
+  trash: SVG(`<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/>`),
 };
 
 // ---- Sidebar ----------------------------------------------------------------
@@ -134,43 +153,24 @@ function buildConnItem(conn: Connection): HTMLLIElement {
   body.append(el("div", "conn-item__sub", connectionSubtitle(conn)));
 
   const actions = el("div", "conn-item__actions");
-  const dashBtn = el("button", "icon-btn", "📊");
-  dashBtn.title = "Server status";
-  dashBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    void dashboard.open(conn);
-  });
-  const tunBtn = el("button", "icon-btn", "🚇");
-  tunBtn.title = "Port forwarding";
-  tunBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    void tunnels.open(conn);
-  });
-  const actBtn = el("button", "icon-btn", "▶");
-  actBtn.title = "Quick actions (one-click commands)";
-  actBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    actionsPanel.open(conn);
-  });
-  const filesBtn = el("button", "icon-btn", "📁");
-  filesBtn.title = "Browse files";
-  filesBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    void filesBrowser.open(conn);
-  });
-  const editBtn = el("button", "icon-btn", "✎");
-  editBtn.title = "Edit";
-  editBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    modal.openEdit(conn);
-  });
-  const delBtn = el("button", "icon-btn icon-btn--danger", "🗑");
-  delBtn.title = "Delete";
-  delBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    void removeConnection(conn);
-  });
-  actions.append(dashBtn, tunBtn, actBtn, filesBtn, editBtn, delBtn);
+  const actionBtn = (icon: string, title: string, onClick: () => void, danger = false): HTMLButtonElement => {
+    const b = el("button", `icon-btn${danger ? " icon-btn--danger" : ""}`);
+    b.innerHTML = icon;
+    b.title = title;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onClick();
+    });
+    return b;
+  };
+  actions.append(
+    actionBtn(ICON.status, "Server status", () => void dashboard.open(conn)),
+    actionBtn(ICON.tunnel, "Port forwarding", () => void tunnels.open(conn)),
+    actionBtn(ICON.run, "Quick actions (one-click commands)", () => actionsPanel.open(conn)),
+    actionBtn(ICON.files, "Browse files", () => void filesBrowser.open(conn)),
+    actionBtn(ICON.edit, "Edit", () => modal.openEdit(conn)),
+    actionBtn(ICON.trash, "Delete", () => void removeConnection(conn), true),
+  );
 
   item.append(dot, star, body, actions);
   item.addEventListener("click", () => void openSession(conn));
@@ -313,6 +313,11 @@ function createSession(conn: Connection, runOnConnect?: string): string {
   tabEl.dataset.sid = sessionId;
   const tabDot = el("span", "tab__dot");
   const tabLabel = el("span", "tab__label", conn.name || conn.host);
+  tabLabel.title = "Double-click to rename this tab";
+  tabLabel.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    beginTabRename(tabLabel);
+  });
   const tabClose = el("button", "tab__close", "×");
   tabClose.title = "Close session";
   tabClose.addEventListener("click", (e) => {
@@ -323,9 +328,18 @@ function createSession(conn: Connection, runOnConnect?: string): string {
   tabEl.addEventListener("click", () => activateSession(sessionId));
   tabbarEl.append(tabEl);
 
+  let announced = false;
   session.onStatusChange = (s) => {
     tabEl.classList.remove("connecting", "connected", "closed");
     tabEl.classList.add(s);
+    if (s === "connected") {
+      pet.celebrate();
+      if (!announced) {
+        announced = true;
+        toast(`Connected to ${conn.name || conn.host}`, "success");
+        confettiBurst(tabEl);
+      }
+    }
     renderSidebar();
   };
   session.onFocus = () => focusPane(sessionId);
@@ -394,6 +408,41 @@ function focusPane(sessionId: string): void {
 function activateSession(sessionId: string): void {
   if (visible.includes(sessionId)) focusPane(sessionId);
   else showSingle(sessionId);
+}
+
+/** Inline-edit a tab's label. The rename is local to this session (a custom tab
+ *  name), not saved to the connection. Enter commits, Escape cancels. */
+function beginTabRename(labelEl: HTMLElement): void {
+  const original = labelEl.textContent ?? "";
+  labelEl.contentEditable = "true";
+  labelEl.classList.add("editing");
+  labelEl.focus();
+  const range = document.createRange();
+  range.selectNodeContents(labelEl);
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+
+  const finish = (commit: boolean): void => {
+    labelEl.removeEventListener("keydown", onKey);
+    labelEl.removeEventListener("blur", onBlur);
+    labelEl.contentEditable = "false";
+    labelEl.classList.remove("editing");
+    const val = (labelEl.textContent ?? "").trim().slice(0, 40);
+    labelEl.textContent = commit && val ? val : original;
+  };
+  const onKey = (ev: KeyboardEvent): void => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      labelEl.blur();
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      finish(false);
+    }
+  };
+  const onBlur = (): void => finish(true);
+  labelEl.addEventListener("keydown", onKey);
+  labelEl.addEventListener("blur", onBlur);
 }
 
 /** Apply the current `visible` set + split direction to the DOM. */
@@ -486,6 +535,7 @@ const palette = new CommandPalette((command) => {
 });
 
 const filesBrowser = new FilesBrowser();
+const pet = new PetPanel($("pet-strip"));
 const dashboard = new DashboardPanel();
 const tunnels = new TunnelsPanel();
 const actionsPanel = new ActionsPanel({
@@ -659,6 +709,9 @@ function openSettings(): void {
   cpNew2El.value = "";
   setFontSizeEl.value = String(termFontSize);
   setTermThemeEl.value = termTheme;
+  $<HTMLInputElement>("set-pet").checked = pet.enabled;
+  $<HTMLInputElement>("set-pet-name").value = pet.name;
+  $<HTMLSelectElement>("set-pet-color").value = pet.color;
   $("update-status").textContent = "";
   void getVersion()
     .then((v) => ($("update-version").textContent = `v${v}`))
@@ -703,7 +756,7 @@ function showUpdateBanner(update: Update): void {
   const banner = $("update-banner");
   const text = $("update-banner-text");
   const go = $<HTMLButtonElement>("update-banner-go");
-  text.textContent = `Vaulterm v${update.version} is available (you have v${update.currentVersion}).`;
+  text.textContent = `Termkin v${update.version} is available (you have v${update.currentVersion}).`;
   go.disabled = false;
   go.textContent = "Update now";
   go.onclick = () => {
@@ -784,8 +837,9 @@ async function copyToClipboard(text: string, btn: HTMLButtonElement): Promise<vo
     const prev = btn.textContent;
     btn.textContent = "Copied ✓";
     window.setTimeout(() => (btn.textContent = prev), 1500);
+    toast("Copied to clipboard", "success");
   } catch {
-    /* clipboard unavailable */
+    toast("Couldn't access the clipboard", "error");
   }
 }
 
@@ -850,6 +904,7 @@ async function handleExportVault(): Promise<void> {
     if (!dest) return;
     await api.vaultExport(dest);
     setSettingsMsg(`Backup saved to ${dest}`, true);
+    toast("Vault backup saved", "success");
   } catch (e) {
     setSettingsMsg(errText(e), false);
   }
@@ -887,7 +942,7 @@ function bindUi(): void {
   void getVersion()
     .then((v) => {
       $("app-version").textContent = `v${v}`;
-      $("lock-version").textContent = `Vaulterm v${v}`;
+      $("lock-version").textContent = `Termkin v${v}`;
     })
     .catch(() => {});
   lockFormEl.addEventListener("submit", (e) => void handleLockSubmit(e));
@@ -935,6 +990,27 @@ function bindUi(): void {
     localStorage.setItem("vaulterm.termTheme", termTheme);
     applyTermPrefs();
   });
+  $("set-pet").addEventListener("change", (e) => {
+    pet.setEnabled((e.currentTarget as HTMLInputElement).checked);
+  });
+  $("set-pet-name").addEventListener("change", (e) => {
+    const input = e.currentTarget as HTMLInputElement;
+    pet.setName(input.value);
+    input.value = pet.name;
+  });
+  const petColorEl = $<HTMLSelectElement>("set-pet-color");
+  petColorEl.replaceChildren(
+    ...MONSTER_COLORS.map(({ id, label }) => {
+      const o = document.createElement("option");
+      o.value = id;
+      o.textContent = label;
+      return o;
+    }),
+  );
+  petColorEl.addEventListener("change", (e) => {
+    pet.setColor((e.currentTarget as HTMLSelectElement).value as MonsterColor);
+    emptyMascot?.refreshColor();
+  });
   settingsBackdropEl.addEventListener("mousedown", (e) => {
     if (e.target === settingsBackdropEl) closeSettings();
   });
@@ -968,6 +1044,25 @@ function bindUi(): void {
     } else if (mod && e.key.toLowerCase() === "w" && activeSessionId) {
       e.preventDefault();
       closeSession(activeSessionId);
+    } else if (mod && e.key >= "1" && e.key <= "9") {
+      // Ctrl/Cmd + 1..9 jumps straight to the Nth tab.
+      const ids = [...sessions.keys()];
+      const idx = Number(e.key) - 1;
+      if (idx < ids.length) {
+        e.preventDefault();
+        activateSession(ids[idx]);
+      }
+    } else if (e.ctrlKey && e.key === "Tab") {
+      // Ctrl+Tab / Ctrl+Shift+Tab cycles through open tabs.
+      const ids = [...sessions.keys()];
+      if (ids.length > 1 && activeSessionId) {
+        e.preventDefault();
+        const cur = ids.indexOf(activeSessionId);
+        const next = e.shiftKey
+          ? (cur - 1 + ids.length) % ids.length
+          : (cur + 1) % ids.length;
+        activateSession(ids[next]);
+      }
     }
   });
 
@@ -983,11 +1078,17 @@ function installCloseGuard(): void {
   try {
     getCurrentWindow()
       .onCloseRequested((event) => {
-        if (
-          filesBrowser.isDirty &&
-          !confirm("You have unsaved changes in the file editor.\n\nClose the app anyway?")
-        ) {
-          event.preventDefault();
+        // If anything in here throws, fall through WITHOUT preventDefault so
+        // the window can still close — a broken guard must never trap the app.
+        try {
+          if (
+            filesBrowser.isDirty &&
+            !confirm("You have unsaved changes in the file editor.\n\nClose the app anyway?")
+          ) {
+            event.preventDefault();
+          }
+        } catch (e) {
+          console.error("close guard failed", e);
         }
       })
       .catch((e) => console.error("close guard registration failed", e));
@@ -996,8 +1097,22 @@ function installCloseGuard(): void {
   }
 }
 
+/** The friendly monster that waits in the empty-session view. */
+let emptyMascot: Mascot | null = null;
+function mountEmptyStateMascot(): void {
+  const host = document.getElementById("empty-cat");
+  if (host) {
+    try {
+      emptyMascot = new Mascot(host, 6);
+    } catch (e) {
+      console.error("mascot failed", e);
+    }
+  }
+}
+
 async function init(): Promise<void> {
   bindUi();
+  mountEmptyStateMascot();
   installCloseGuard();
   try {
     const status = await api.vaultStatus();

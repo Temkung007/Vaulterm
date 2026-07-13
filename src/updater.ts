@@ -78,7 +78,7 @@ export async function checkForUpdates(onStatus: (s: UpdateStatus) => void): Prom
   }
 
   const ok = confirm(
-    `A new version of Vaulterm is available.\n\n` +
+    `A new version of Termkin is available.\n\n` +
       `New: v${update.version}\nCurrent: v${update.currentVersion}\n\n` +
       (update.body ? `${update.body}\n\n` : "") +
       `Download and install now? The app will relaunch when it finishes.`,

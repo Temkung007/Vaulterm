@@ -10,15 +10,16 @@ import type { Connection } from "./api";
 
 export type SessionStatus = "connecting" | "connected" | "closed";
 
-export const DEFAULT_THEME = "Vaulterm Dark";
+export const DEFAULT_THEME = "Termkin Dark";
 
 /** Terminal color themes (name -> xterm ITheme). */
 export const TERMINAL_THEMES: Record<string, ITheme> = {
-  "Vaulterm Dark": {
-    background: "#0d1117",
-    foreground: "#e6edf3",
-    cursor: "#2f81f7",
-    selectionBackground: "#264f78",
+  "Termkin Dark": {
+    background: "#0a0e13",
+    foreground: "#e7edf4",
+    cursor: "#40d3c6",
+    cursorAccent: "#04231f",
+    selectionBackground: "#1d3b4a",
   },
   Dracula: {
     background: "#282a36",
@@ -213,6 +214,9 @@ export class TerminalSession {
       else if (k === "=" || k === "+") this.onZoom?.(1);
       else if (k === "-" || k === "_") this.onZoom?.(-1);
       else if (k === "0") this.onZoom?.("reset");
+      // Keep the app's tab shortcuts (Ctrl+1..9, Ctrl+Tab) out of the shell;
+      // the document-level handler does the actual tab switching.
+      else if (k === "Tab" || (k >= "1" && k <= "9")) handled = true;
       else handled = false;
       if (handled) {
         e.preventDefault();

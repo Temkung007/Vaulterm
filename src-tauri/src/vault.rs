@@ -15,6 +15,7 @@ use aes_gcm::{Aes256Gcm, Key, Nonce};
 use anyhow::{anyhow, bail, Context, Result};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+#[cfg(desktop)]
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -70,14 +71,39 @@ pub struct Vault {
     inner: Mutex<Option<Unlocked>>,
 }
 
+/// On mobile there is no per-user config dir; the app's sandbox path is resolved
+/// once at startup (see `lib.rs` setup hook) and stashed here for `vault_path()`.
+#[cfg(mobile)]
+static MOBILE_BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Record the sandbox directory the mobile vault lives in. Called from the Tauri
+/// setup hook with `app.path().app_config_dir()`.
+#[cfg(mobile)]
+pub fn set_base_dir(dir: PathBuf) {
+    let _ = MOBILE_BASE.set(dir);
+}
+
 fn vault_path() -> Result<PathBuf> {
     // Test override so unit tests never touch the real vault.
     if let Ok(p) = std::env::var("TR_VAULT_PATH") {
         return Ok(PathBuf::from(p));
     }
-    let dirs = ProjectDirs::from("com", "codework", "Vaulterm")
-        .ok_or_else(|| anyhow!("could not determine a config directory"))?;
-    let dir = dirs.config_local_dir().to_path_buf();
+
+    // Mobile: use the app sandbox dir resolved at startup via Tauri's path API.
+    #[cfg(mobile)]
+    let dir = MOBILE_BASE
+        .get()
+        .cloned()
+        .ok_or_else(|| anyhow!("app config directory not initialized"))?;
+
+    // Desktop: keep the existing per-user config location so shipped vaults stay
+    // exactly where they are.
+    #[cfg(desktop)]
+    let dir = ProjectDirs::from("com", "codework", "Vaulterm")
+        .ok_or_else(|| anyhow!("could not determine a config directory"))?
+        .config_local_dir()
+        .to_path_buf();
+
     fs::create_dir_all(&dir).with_context(|| format!("creating {dir:?}"))?;
     Ok(dir.join("vault.json"))
 }

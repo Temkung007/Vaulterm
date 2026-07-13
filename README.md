@@ -1,7 +1,11 @@
-# Vaulterm
+# Termkin
 
-A small desktop **SSH terminal** that remembers your connections. Built with
+A small desktop **SSH terminal** that remembers your connections — guarded by
+**Termkin**, the little terminal monster that keeps your keys. Built with
 **Tauri 2 + Rust** (backend) and **TypeScript + xterm.js** (frontend).
+
+> Formerly “Vaulterm”. The internal crate/bundle identifier is still
+> `vaulterm` / `com.codework.vaulterm` so existing encrypted vaults keep loading.
 
 - 🔒 **Master-password vault** — set a password on first run; everything you
   save is encrypted at rest with **Argon2id + AES-256-GCM**. You unlock with the

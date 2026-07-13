@@ -36,10 +36,34 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+
+    // The updater + relaunch plugins exist only on desktop; the stores handle
+    // updates on mobile and these crates don't build for iOS/Android.
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init());
+    }
+
+    builder
+        // On mobile the vault lives in the app's sandbox, resolved via Tauri's
+        // path API (the `directories` crate used on desktop has no sandbox
+        // concept there). Desktop keeps its existing per-user config location.
+        .setup(|app| {
+            #[cfg(mobile)]
+            {
+                use tauri::Manager;
+                if let Ok(dir) = app.path().app_config_dir() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    vault::set_base_dir(dir);
+                }
+            }
+            let _ = app;
+            Ok(())
+        })
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::vault_status,
