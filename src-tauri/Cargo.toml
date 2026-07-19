@@ -1,6 +1,6 @@
 [package]
 name = "vaulterm"
-version = "0.4.1"
+version = "0.4.2"
 description = "An SSH terminal that saves connections in an encrypted vault"
 authors = ["you"]
 edition = "2021"
@@ -21,6 +21,14 @@ tauri-plugin-dialog = "2"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Vault-at-rest serialization. The encrypted `vault.json` is a protobuf message
+# (both the outer container and the inner data blob). prost derives the codec
+# from hand-annotated structs — no `.proto` files, no `protoc`, no build-script
+# codegen — so it builds on Windows/mobile with just the Rust toolchain, matching
+# the project's aversion to native build tooling (see the `ring` note above).
+# JSON (serde_json) is still used for legacy-vault migration, Tauri IPC and MCP.
+prost = "0.13"
 
 # Async runtime for the SSH session pump (Tauri runs on tokio under the hood).
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "sync", "time", "fs"] }

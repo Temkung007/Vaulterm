@@ -5,6 +5,7 @@ mod ssh;
 mod store;
 mod tunnel;
 mod vault;
+mod vault_pb;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
