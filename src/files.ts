@@ -27,12 +27,70 @@ function basename(p: string): string {
   const parts = p.split(/[\\/]/);
   return parts[parts.length - 1] || p;
 }
+/**
+ * Join a *local* directory and one or more path segments. Unlike the remote
+ * side this has to cope with Windows paths, so the separator is taken from the
+ * directory the native picker handed back rather than hard-coded; `/`-separated
+ * segments (which is how the backend reports paths inside a walked folder) are
+ * re-joined with it.
+ */
+function joinLocal(dir: string, ...segments: string[]): string {
+  const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+  const parts = segments.flatMap((s) => s.split("/")).filter(Boolean);
+  return [dir.replace(/[\\/]+$/, ""), ...parts].join(sep);
+}
 function errText(e: unknown): string {
   if (typeof e === "string") return e;
   if (e && typeof e === "object" && typeof (e as { message?: unknown }).message === "string") {
     return (e as { message: string }).message;
   }
   return String(e);
+}
+
+/**
+ * Extensions we open in the image preview instead of the text editor, mapped to
+ * the MIME type handed to the webview. Raster formats only — SVG is text, and
+ * keeping it in the editor means it stays editable.
+ *
+ * TIFF renders on WebKit (macOS/iOS) but not on Chromium/WebView2; it's listed
+ * anyway so it at least gets the preview pane, where a decode failure surfaces
+ * as a clear "can't display this format" instead of a binary-file error.
+ */
+const IMAGE_MIME: Readonly<Record<string, string>> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  jpe: "image/jpeg",
+  jfif: "image/jpeg",
+  png: "image/png",
+  apng: "image/apng",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  cur: "image/x-icon",
+  tif: "image/tiff",
+  tiff: "image/tiff",
+};
+
+/** MIME type for a previewable image path, or null if it isn't one. */
+function imageMimeFor(path: string): string | null {
+  const name = (path.split(/[\\/]/).pop() ?? "").toLowerCase();
+  if (!name.includes(".")) return null;
+  return IMAGE_MIME[name.split(".").pop()!] ?? null;
+}
+
+/**
+ * Decode the base64 the backend sends into a Blob. A blob: URL (rather than a
+ * data: URL) keeps the decoded bytes out of a multi-megabyte string that the
+ * webview would have to re-parse — the CSP in tauri.conf.json allows blob: for
+ * img-src precisely for this.
+ */
+function base64ToBlob(b64: string, mime: string): Blob {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(
@@ -56,16 +114,45 @@ export class FilesBrowser {
   private pathEl = $<HTMLInputElement>("files-path");
   private breadcrumbEl = $<HTMLElement>("files-breadcrumbs");
   private filterEl = $<HTMLInputElement>("files-filter");
+  private selectAllEl = $<HTMLInputElement>("files-selectall");
+  private downloadSelEl = $<HTMLButtonElement>("files-download-sel");
   private listEl = $<HTMLUListElement>("files-list");
   private openPathEl = $<HTMLSpanElement>("files-openpath");
   private saveBtn = $<HTMLButtonElement>("files-save");
   private editor: CodeEditor;
+  private editorEl = $<HTMLDivElement>("files-editor");
+  private textToolsEl = $<HTMLDivElement>("files-text-tools");
+  private imageToolsEl = $<HTMLDivElement>("files-image-tools");
+  private previewEl = $<HTMLDivElement>("files-preview");
+  private previewImgEl = $<HTMLImageElement>("files-preview-img");
+  private zoomEl = $<HTMLSpanElement>("files-zoom");
   private statusEl = $<HTMLDivElement>("files-status");
+  private progressEl = $<HTMLDivElement>("files-progress");
+  private progressTrackEl = $<HTMLDivElement>("files-progress-track");
+  private progressFillEl = $<HTMLDivElement>("files-progress-fill");
+  private progressTextEl = $<HTMLSpanElement>("files-progress-text");
+  private progressCancelEl = $<HTMLButtonElement>("files-progress-cancel");
 
   private conn?: Connection;
   private currentPath = "/";
   /** Unfiltered entries for the current directory (the filter box works on these). */
   private entries: FileEntry[] = [];
+  /**
+   * Names of the files ticked for a batch download. Scoped to the current
+   * directory — navigating away clears it, so a selection can never span
+   * folders and silently download something the user can't see.
+   */
+  private selected = new Set<string>();
+  /** File names in display order, for shift-click range selection. */
+  private selectableNames: string[] = [];
+  /** Anchor for the next shift-click range. */
+  private lastToggled: string | null = null;
+  /** A batch transfer is running — blocks starting a second one. */
+  private busy = false;
+  /** Set by Cancel (or closing the browser); the transfer loop stops at the next file. */
+  private cancelRequested = false;
+  /** What the right-hand pane is showing: nothing, an editable file, or an image. */
+  private mode: "none" | "text" | "image" = "none";
   private openPath: string | null = null;
   /** mtime + size of the open file when read — baseline for the stale-write guard. */
   private openMtime: number | null = null;
@@ -73,6 +160,11 @@ export class FilesBrowser {
   /** Overwrite already confirmed for the currently-open file (no re-nag on re-save). */
   private confirmedThisOpen = false;
   private dirty = false;
+  /** Object URL backing the previewed image — revoked whenever the pane changes. */
+  private previewUrl: string | null = null;
+  private previewSize = 0;
+  /** Preview scale; null means "fit to the pane". */
+  private zoom: number | null = null;
 
   constructor() {
     $("files-close").addEventListener("click", () => this.close());
@@ -83,12 +175,60 @@ export class FilesBrowser {
     $("files-upload").addEventListener("click", () => void this.uploadFiles());
     this.saveBtn.addEventListener("click", () => void this.save());
 
+    // Batch selection: the header box ticks/unticks everything currently listed
+    // (i.e. what the filter is showing, not the whole directory).
+    this.selectAllEl.addEventListener("change", () => {
+      for (const name of this.selectableNames) {
+        if (this.selectAllEl.checked) this.selected.add(name);
+        else this.selected.delete(name);
+      }
+      this.lastToggled = null;
+      this.syncChecks();
+    });
+    this.downloadSelEl.addEventListener("click", () => void this.downloadSelected());
+    this.progressCancelEl.addEventListener("click", () => {
+      this.cancelRequested = true;
+      this.progressCancelEl.disabled = true;
+      this.progressCancelEl.textContent = "Cancelling…";
+    });
+
     // Editor tools.
     $("files-find").addEventListener("click", () => this.editor.openFind());
     $("files-goto").addEventListener("click", () => this.editor.goToLine());
     $("files-wrap").addEventListener("click", (e) => {
       const on = this.editor.toggleWrap();
       (e.currentTarget as HTMLElement).classList.toggle("icon-btn--active", on);
+    });
+
+    // Image preview tools.
+    $("files-zoom-in").addEventListener("click", () => this.zoomBy(1.25));
+    $("files-zoom-out").addEventListener("click", () => this.zoomBy(1 / 1.25));
+    $("files-zoom-fit").addEventListener("click", () => this.setZoom(null));
+    $("files-zoom-1x").addEventListener("click", () => this.setZoom(1));
+    // Double-click toggles fit ↔ actual size, the way every image viewer does.
+    this.previewEl.addEventListener("dblclick", () => this.setZoom(this.zoom === null ? 1 : null));
+    // Ctrl/Cmd+wheel zooms; a plain wheel still scrolls a zoomed-in image.
+    this.previewEl.addEventListener(
+      "wheel",
+      (e) => {
+        if (!e.ctrlKey && !e.metaKey) return;
+        e.preventDefault();
+        this.zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1);
+      },
+      { passive: false },
+    );
+    this.previewImgEl.addEventListener("load", () => {
+      const { naturalWidth: w, naturalHeight: h } = this.previewImgEl;
+      this.setStatus(`${w} × ${h} · ${fmtSize(this.previewSize)}`);
+    });
+    this.previewImgEl.addEventListener("error", () => {
+      // Only a real (non-empty) src failing to decode is an error — clearing the
+      // pane also fires this event.
+      if (!this.previewImgEl.getAttribute("src")) return;
+      this.setStatus(
+        "Can't display this image format — download it to open it locally",
+        "error",
+      );
     });
 
     // Type a path + Enter to jump anywhere; Escape/blur restores the current dir.
@@ -149,8 +289,10 @@ export class FilesBrowser {
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape" || !this.isOpen) return;
       if ($("files-editor").contains(document.activeElement)) return;
-      // Inputs (path/filter) handle their own Escape — don't close over them.
-      if (e.target instanceof HTMLInputElement) return;
+      // The text inputs (path/filter) handle their own Escape — don't close over
+      // them. A focused selection tick box has no such handling, so Escape there
+      // should still close the browser.
+      if (e.target instanceof HTMLInputElement && e.target.type !== "checkbox") return;
       this.close();
     });
   }
@@ -171,6 +313,10 @@ export class FilesBrowser {
     this.listEl.replaceChildren();
     this.breadcrumbEl.replaceChildren();
     this.entries = [];
+    this.selected.clear();
+    this.selectableNames = [];
+    this.lastToggled = null;
+    this.syncChecks();
     this.pathEl.value = "";
     this.filterEl.value = "";
     this.backdrop.classList.remove("hidden");
@@ -185,6 +331,7 @@ export class FilesBrowser {
 
   /** Force-hide without prompting (used when the vault locks). */
   hideForLock(): void {
+    this.cancelRequested = true;
     this.backdrop.classList.add("hidden");
     this.conn = undefined;
     this.clearEditor();
@@ -192,6 +339,9 @@ export class FilesBrowser {
 
   close(): void {
     if (this.dirty && !confirm("Discard unsaved changes and close?")) return;
+    if (this.busy && !confirm("A download is still running — stop it and close?")) return;
+    // Stops the transfer loop after the file currently in flight.
+    this.cancelRequested = true;
     this.backdrop.classList.add("hidden");
     this.conn = undefined;
     this.clearEditor();
@@ -205,6 +355,9 @@ export class FilesBrowser {
       this.currentPath = path;
       this.pathEl.value = path;
       this.entries = entries;
+      // A selection only ever means "these files, in this folder".
+      this.selected.clear();
+      this.lastToggled = null;
       this.filterEl.value = "";
       this.renderBreadcrumbs();
       this.renderList(entries);
@@ -240,10 +393,15 @@ export class FilesBrowser {
 
   private renderList(entries: FileEntry[]): void {
     this.listEl.replaceChildren();
+    this.selectableNames = entries.map((e) => e.name);
 
     if (this.currentPath !== "/") {
       const up = el("li", "files__item files__item--dir");
-      up.append(el("span", "files__icon", "📁"), el("span", "files__name", ".."));
+      up.append(
+        el("span", "files__check-gap"),
+        el("span", "files__icon", "📁"),
+        el("span", "files__name", ".."),
+      );
       up.addEventListener("click", () => void this.navigate(parentPath(this.currentPath)));
       this.listEl.append(up);
     }
@@ -251,12 +409,31 @@ export class FilesBrowser {
     if (entries.length === 0) {
       const empty = el("li", "files__empty", this.entries.length ? "No matches" : "Empty");
       this.listEl.append(empty);
+      this.syncChecks();
       return;
     }
 
     for (const entry of entries) {
       const item = el("li", `files__item${entry.isDir ? " files__item--dir" : ""}`);
-      const icon = entry.isSymlink ? "🔗" : entry.isDir ? "📁" : "📄";
+      const mime = entry.isDir ? null : imageMimeFor(entry.name);
+      const icon = entry.isSymlink ? "🔗" : entry.isDir ? "📁" : mime ? "🖼" : "📄";
+
+      // Both files and folders can be ticked; a ticked folder downloads whole.
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.className = "files__check";
+      check.dataset.name = entry.name;
+      check.checked = this.selected.has(entry.name);
+      check.title = entry.isDir
+        ? "Select this folder (downloads everything inside)"
+        : "Select for batch download";
+      // The row's own click opens the entry — a tick must not do that too.
+      check.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.toggleSelection(entry.name, check.checked, e.shiftKey);
+      });
+      item.append(check);
+
       item.append(el("span", "files__icon", icon));
       item.append(el("span", "files__name", entry.name));
       if (!entry.isDir) item.append(el("span", "files__size", fmtSize(entry.size)));
@@ -264,15 +441,16 @@ export class FilesBrowser {
       const full = joinPath(this.currentPath, entry.name);
 
       const acts = el("div", "files__item-actions");
-      if (!entry.isDir) {
-        const dl = el("button", "icon-btn", "⬇");
-        dl.title = "Download";
-        dl.addEventListener("click", (e) => {
-          e.stopPropagation();
-          void this.downloadFile(entry.name, full);
-        });
-        acts.append(dl);
-      }
+      const dl = el("button", "icon-btn", "⬇");
+      dl.title = entry.isDir ? "Download this folder" : "Download";
+      dl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // A folder goes through the batch path (walk + progress bar); a single
+        // file keeps the nicer "Save as…" dialog with an editable name.
+        if (entry.isDir) void this.downloadEntries([entry]);
+        else void this.downloadFile(entry.name, full);
+      });
+      acts.append(dl);
       const rn = el("button", "icon-btn", "✎");
       rn.title = "Rename";
       rn.addEventListener("click", (e) => {
@@ -290,13 +468,203 @@ export class FilesBrowser {
 
       item.addEventListener("click", () => {
         if (entry.isDir) void this.navigate(full);
+        else if (mime) void this.previewImage(full, mime);
         else void this.loadFile(full);
       });
       this.listEl.append(item);
     }
+    this.syncChecks();
+  }
+
+  // ---- batch selection ----
+
+  /**
+   * Tick or untick one file. With shift held, the whole range between the last
+   * box the user touched and this one takes the new state — the usual
+   * file-manager shortcut for grabbing a run of files.
+   */
+  private toggleSelection(name: string, checked: boolean, shift: boolean): void {
+    const apply = (n: string) => (checked ? this.selected.add(n) : this.selected.delete(n));
+    const from = this.lastToggled ? this.selectableNames.indexOf(this.lastToggled) : -1;
+    const to = this.selectableNames.indexOf(name);
+    if (shift && from !== -1 && to !== -1) {
+      const [lo, hi] = from < to ? [from, to] : [to, from];
+      for (let i = lo; i <= hi; i++) apply(this.selectableNames[i]);
+    } else {
+      apply(name);
+    }
+    this.lastToggled = name;
+    this.syncChecks();
+  }
+
+  /** Push the selection state back into the checkboxes, header box and button. */
+  private syncChecks(): void {
+    for (const box of this.listEl.querySelectorAll<HTMLInputElement>(".files__check")) {
+      const name = box.dataset.name;
+      if (name) box.checked = this.selected.has(name);
+    }
+    const shown = this.selectableNames.filter((n) => this.selected.has(n)).length;
+    this.selectAllEl.checked = shown > 0 && shown === this.selectableNames.length;
+    this.selectAllEl.indeterminate = shown > 0 && shown < this.selectableNames.length;
+    this.selectAllEl.disabled = this.selectableNames.length === 0 || this.busy;
+    // Count the whole selection, not just the part the filter is showing, so the
+    // button never under-reports what a click is about to download.
+    const total = this.selected.size;
+    this.downloadSelEl.disabled = total === 0 || this.busy;
+    this.downloadSelEl.textContent = total ? `⬇ Download (${total})` : "⬇ Download";
   }
 
   // ---- file operations ----
+
+  private downloadSelected(): Promise<void> {
+    // Walk `entries` rather than the set so the order matches the listing.
+    return this.downloadEntries(this.entries.filter((e) => this.selected.has(e.name)));
+  }
+
+  /**
+   * Download the given entries into one folder the user picks. Ticked folders
+   * are expanded first (recursively) so the whole job is known up front — that's
+   * what makes an honest "12 / 87 files" progress bar possible instead of a
+   * spinner that can't say how much is left.
+   *
+   * Transfers run one at a time and a failure doesn't abort the run: the rest
+   * still arrive and the failures are summarised at the end, which beats losing
+   * an 800-file tree to one unreadable file.
+   */
+  private async downloadEntries(picked: FileEntry[]): Promise<void> {
+    const conn = this.conn;
+    if (!conn || this.busy || picked.length === 0) return;
+
+    const folders = picked.filter((e) => e.isDir).length;
+    const dest = await open({
+      directory: true,
+      multiple: false,
+      title: `Download ${picked.length} item(s) to…`,
+    });
+    if (!dest || Array.isArray(dest)) return;
+
+    // Expand folders into concrete files. Done before the confirm so the user is
+    // told the real file count, not the number of things they ticked.
+    type Job = { remote: string; local: string; rel: string; size: number };
+    const jobs: Job[] = [];
+    if (folders > 0) this.setStatus(`Scanning ${folders} folder(s)…`);
+    try {
+      for (const entry of picked) {
+        const remote = joinPath(this.currentPath, entry.name);
+        if (entry.isDir) {
+          for (const f of await api.sftpWalk(conn.id, remote)) {
+            jobs.push({
+              remote: f.path,
+              local: joinLocal(dest, entry.name, f.rel),
+              rel: `${entry.name}/${f.rel}`,
+              size: f.size,
+            });
+          }
+        } else {
+          jobs.push({
+            remote,
+            local: joinLocal(dest, entry.name),
+            rel: entry.name,
+            size: entry.size,
+          });
+        }
+      }
+    } catch (e) {
+      this.setStatus(errText(e), "error");
+      return;
+    }
+
+    if (jobs.length === 0) {
+      this.setStatus("Nothing to download — the selected folder(s) are empty", "error");
+      return;
+    }
+
+    const totalBytes = jobs.reduce((n, j) => n + j.size, 0);
+    const what =
+      folders > 0
+        ? `${jobs.length} file(s) (${fmtSize(totalBytes)}), including everything inside ${folders} folder(s),`
+        : `${jobs.length} file(s) (${fmtSize(totalBytes)})`;
+    if (
+      !confirm(
+        `Download ${what} from ${conn.host} to:\n${dest}\n\n` +
+          `Existing files with the same name will be overwritten.`,
+      )
+    ) {
+      return;
+    }
+
+    this.busy = true;
+    this.cancelRequested = false;
+    this.beginProgress();
+    this.syncChecks();
+
+    const failed: string[] = [];
+    let done = 0;
+    let bytes = 0;
+    try {
+      for (const job of jobs) {
+        if (this.cancelRequested) break;
+        this.setStatus(`Downloading ${done + 1} of ${jobs.length} — ${job.rel}…`);
+        try {
+          await api.sftpDownload(conn.id, job.remote, job.local);
+        } catch (e) {
+          failed.push(`${job.rel} (${errText(e)})`);
+        }
+        done++;
+        bytes += job.size;
+        this.updateProgress(done, jobs.length, bytes, totalBytes);
+      }
+    } finally {
+      this.busy = false;
+      this.endProgress();
+    }
+
+    const ok = done - failed.length;
+    if (this.cancelRequested) {
+      this.setStatus(`Cancelled — ${ok} of ${jobs.length} file(s) saved to ${dest}`, "error");
+    } else if (failed.length > 0) {
+      // Cap the list: a broken tree can fail hundreds of files and the status
+      // bar is one line.
+      const shown = failed.slice(0, 3).join(", ");
+      const more = failed.length > 3 ? ` (+${failed.length - 3} more)` : "";
+      this.setStatus(`Downloaded ${ok} of ${jobs.length} — failed: ${shown}${more}`, "error");
+    } else {
+      this.setStatus(`Downloaded ${ok} file(s) to ${dest}`, "ok");
+      this.selected.clear();
+      this.lastToggled = null;
+    }
+    this.syncChecks();
+  }
+
+  // ---- transfer progress ----
+
+  private beginProgress(): void {
+    this.progressCancelEl.disabled = false;
+    this.progressCancelEl.textContent = "Cancel";
+    this.progressEl.classList.remove("hidden");
+    this.updateProgress(0, 1, 0, 0);
+  }
+
+  /**
+   * Advance the bar. The fill tracks *bytes* (a 4 MB photo shouldn't move it as
+   * far as a 2 KB config file) while the label counts files, which is what the
+   * user actually asked for.
+   */
+  private updateProgress(done: number, total: number, bytes: number, totalBytes: number): void {
+    const frac = totalBytes > 0 ? bytes / totalBytes : total > 0 ? done / total : 0;
+    const pct = Math.max(0, Math.min(100, frac * 100));
+    this.progressFillEl.style.width = `${pct}%`;
+    this.progressTrackEl.setAttribute("aria-valuenow", String(Math.round(pct)));
+    this.progressTextEl.textContent = totalBytes
+      ? `${done} / ${total} files · ${fmtSize(bytes)} / ${fmtSize(totalBytes)}`
+      : `${done} / ${total} files`;
+  }
+
+  private endProgress(): void {
+    this.progressEl.classList.add("hidden");
+    this.progressFillEl.style.width = "0%";
+  }
+
   private async uploadFiles(): Promise<void> {
     if (!this.conn) return;
     const sel = await open({ multiple: true, directory: false, title: "Upload files" });
@@ -415,12 +783,86 @@ export class FilesBrowser {
     }
   }
 
+  /**
+   * Show an image in the right-hand pane. Images can't round-trip through the
+   * text editor at all (the backend rejects them as binary), so this replaces
+   * the editor rather than living beside it: the pane is view-only, and the
+   * editor's own state is cleared so nothing stale can be saved over the image.
+   */
+  private async previewImage(path: string, mime: string): Promise<void> {
+    if (!this.conn) return;
+    if (this.dirty && !confirm("Discard unsaved changes to the current file?")) return;
+    this.setStatus("Loading image…");
+    try {
+      const file = await api.sftpReadBinary(this.conn.id, path);
+      const url = URL.createObjectURL(base64ToBlob(file.base64, mime));
+      // clearEditor() revokes any previous preview URL — take the new one after.
+      this.clearEditor();
+      this.previewUrl = url;
+      this.previewSize = file.size;
+      this.openPath = path;
+      this.openPathEl.textContent = path;
+      this.mode = "image";
+      this.applyMode();
+      this.setZoom(null);
+      this.previewImgEl.src = url;
+      // The real status (dimensions + size) lands in the img `load` handler.
+      this.setStatus(`Decoding ${fmtSize(file.size)}…`);
+    } catch (e) {
+      this.setStatus(errText(e), "error");
+    }
+  }
+
+  /** Show the pane that matches the current mode and hide the other one. */
+  private applyMode(): void {
+    const img = this.mode === "image";
+    this.previewEl.classList.toggle("hidden", !img);
+    this.editorEl.classList.toggle("hidden", img);
+    this.imageToolsEl.classList.toggle("hidden", !img);
+    this.textToolsEl.classList.toggle("hidden", img);
+  }
+
+  /** Apply a preview scale; `null` fits the image to the pane. */
+  private setZoom(z: number | null): void {
+    this.zoom = z;
+    const img = this.previewImgEl;
+    if (z === null) {
+      this.previewEl.classList.remove("files__preview--zoomed", "files__preview--pixel");
+      img.style.width = "";
+      img.style.height = "";
+      this.zoomEl.textContent = "Fit";
+      return;
+    }
+    this.previewEl.classList.add("files__preview--zoomed");
+    this.previewEl.classList.toggle("files__preview--pixel", z >= 2);
+    img.style.width = `${Math.max(1, Math.round(img.naturalWidth * z))}px`;
+    img.style.height = "auto";
+    this.zoomEl.textContent = `${Math.round(z * 100)}%`;
+  }
+
+  /**
+   * Step the zoom. Starting from "fit" this measures the scale the image is
+   * actually rendered at, so the first zoom step continues from what's on
+   * screen rather than jumping to 100%.
+   */
+  private zoomBy(factor: number): void {
+    if (this.mode !== "image") return;
+    const img = this.previewImgEl;
+    if (!img.naturalWidth) return;
+    const current = this.zoom ?? img.clientWidth / img.naturalWidth;
+    this.setZoom(Math.min(16, Math.max(0.05, current * factor)));
+  }
+
   private async loadFile(path: string): Promise<void> {
     if (!this.conn) return;
     if (this.dirty && !confirm("Discard unsaved changes to the current file?")) return;
     this.setStatus("Opening…");
     try {
       const file = await api.sftpRead(this.conn.id, path);
+      this.clearPreview();
+      this.mode = "text";
+      // Reveal the editor before loading it — CodeMirror measures on the way in.
+      this.applyMode();
       this.editor.setContent(file.content, path);
       this.openPath = path;
       this.openMtime = file.mtime;
@@ -437,8 +879,9 @@ export class FilesBrowser {
 
   private async save(): Promise<void> {
     // Nothing to write if the buffer is clean (also short-circuits a Ctrl+S in
-    // the editor on a freshly-opened, unmodified file).
-    if (!this.conn || !this.openPath || !this.dirty) return;
+    // the editor on a freshly-opened, unmodified file), and the image preview is
+    // strictly view-only — never let a save path reach it.
+    if (!this.conn || !this.openPath || !this.dirty || this.mode !== "text") return;
     // Confirm the overwrite once per opened file — routine re-saves (e.g. repeated
     // Ctrl+S) don't re-nag. The stale-file guard in doSave() always fires and is
     // the real protection against clobbering someone else's changes.
@@ -497,8 +940,20 @@ export class FilesBrowser {
     }
   }
 
+  /** Tear down the image preview and release the decoded bytes. */
+  private clearPreview(): void {
+    this.previewImgEl.removeAttribute("src");
+    if (this.previewUrl) URL.revokeObjectURL(this.previewUrl);
+    this.previewUrl = null;
+    this.previewSize = 0;
+    this.setZoom(null);
+  }
+
   private clearEditor(): void {
     this.editor.clear();
+    this.clearPreview();
+    this.mode = "none";
+    this.applyMode();
     this.openPath = null;
     this.openMtime = null;
     this.openSize = null;

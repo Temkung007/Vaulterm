@@ -1327,6 +1327,36 @@ textarea:focus-visible {
   font-size: 12px;
   user-select: none;
 }
+/* The batch-download button spends most of its life disabled (nothing ticked),
+   so it needs to read as unavailable rather than merely idle. */
+.btn--ghost:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.files__selectall {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.files__check,
+.files__selectall input {
+  accent-color: var(--accent);
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+/* Keeps folder rows aligned with the file rows that carry a tick box. */
+.files__check-gap {
+  width: 13px;
+  flex-shrink: 0;
+}
 .files__filter {
   width: 200px;
   background: var(--bg);
@@ -1398,6 +1428,9 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* Grid items default to min-height:auto, which would let a tall previewed
+     image stretch the whole overlay instead of scrolling inside the pane. */
+  min-height: 0;
 }
 .files__editor-head {
   display: flex;
@@ -1438,12 +1471,98 @@ textarea:focus-visible {
 .files__editor-cm .cm-editor.cm-focused {
   outline: none;
 }
-.files__status {
+.files__zoom {
+  min-width: 44px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+/*
+ * Image preview. `margin: auto` on the flex child (rather than centering via
+ * justify/align on the container) is what keeps a zoomed-in image scrollable in
+ * both directions — plain centering makes the overflow past the start edge
+ * unreachable.
+ */
+.files__preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+  padding: 12px;
+  background: var(--bg-elev);
+}
+/* The checkerboard sits behind the image itself, so it reads as "this part is
+   transparent" (PNG/GIF/WebP) rather than as pane decoration. */
+.files__preview-img {
+  margin: auto;
+  display: block;
+  /* Keeps large photos legible at "Fit"; zooming past 100% swaps this out. */
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  user-select: none;
+  background-color: #11161d;
+  background-image:
+    linear-gradient(45deg, #1b222c 25%, transparent 25%),
+    linear-gradient(-45deg, #1b222c 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #1b222c 75%),
+    linear-gradient(-45deg, transparent 75%, #1b222c 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+/* Zoomed: explicit pixel width wins, and the image is free to overflow + scroll. */
+.files__preview--zoomed .files__preview-img {
+  max-width: none;
+  max-height: none;
+}
+/* Past 2× it's a pixel inspection, not a photo — don't smear it. */
+.files__preview--pixel .files__preview-img {
+  image-rendering: pixelated;
+}
+.files__footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
   padding: 6px 14px;
   border-top: 1px solid var(--border);
+  min-height: 26px;
+}
+.files__status {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   color: var(--text-faint);
-  min-height: 26px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Transfer progress. Only shown while a batch download is running. */
+.files__progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.files__progress-track {
+  width: 180px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-elev-3);
+  overflow: hidden;
+}
+.files__progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.15s linear;
+}
+.files__progress-text {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 .files__status.error {
   color: var(--danger);

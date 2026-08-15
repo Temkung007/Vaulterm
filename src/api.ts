@@ -187,6 +187,14 @@ export interface FileContent {
   size: number;
 }
 
+/** A file's raw bytes (base64), for previewing formats the text editor can't show. */
+export interface BinaryContent {
+  /** Standard base64 (padded) — feed straight to `atob`. */
+  base64: string;
+  size: number;
+  mtime: number | null;
+}
+
 /** Fresh metadata returned after a write, to advance the optimistic-lock baseline. */
 export interface WriteResult {
   mtime: number | null;
@@ -203,6 +211,27 @@ export function sftpList(connectionId: string, path: string): Promise<FileEntry[
 /** Read a file as UTF-8 text + mtime (rejects binary / oversized files). */
 export function sftpRead(connectionId: string, path: string): Promise<FileContent> {
   return invoke("sftp_read", { connectionId, path });
+}
+/** One file inside a walked folder tree. */
+export interface WalkEntry {
+  /** Absolute remote path. */
+  path: string;
+  /** Path relative to the walked root, `/`-separated. */
+  rel: string;
+  size: number;
+}
+
+/**
+ * Flatten a remote folder into every file underneath it (recursively), so a
+ * folder download becomes a countable set of transfers. Symlinks are listed as
+ * files and never descended into.
+ */
+export function sftpWalk(connectionId: string, path: string): Promise<WalkEntry[]> {
+  return invoke("sftp_walk", { connectionId, path });
+}
+/** Read a file's raw bytes as base64 (image preview). Rejects oversized files. */
+export function sftpReadBinary(connectionId: string, path: string): Promise<BinaryContent> {
+  return invoke("sftp_read_binary", { connectionId, path });
 }
 /**
  * Overwrite a file with an optimistic lock. Pass the mtime + size the file had

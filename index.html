@@ -296,6 +296,18 @@
         </div>
         <div class="files__subbar">
           <nav id="files-breadcrumbs" class="files__breadcrumbs"></nav>
+          <label class="files__selectall" title="Select every file in this folder">
+            <input id="files-selectall" type="checkbox" />
+            <span>All</span>
+          </label>
+          <button
+            id="files-download-sel"
+            class="btn btn--ghost"
+            title="Download the selected files"
+            disabled
+          >
+            ⬇ Download
+          </button>
           <input
             id="files-filter"
             class="files__filter"
@@ -310,17 +322,45 @@
           <div class="files__editor">
             <div class="files__editor-head">
               <span id="files-openpath" class="files__openpath">No file open</span>
-              <div class="files__editor-tools">
+              <div id="files-text-tools" class="files__editor-tools">
                 <button id="files-find" class="icon-btn" title="Find / Replace (Ctrl+F)">🔍</button>
                 <button id="files-goto" class="icon-btn" title="Go to line">↦</button>
                 <button id="files-wrap" class="icon-btn" title="Toggle word wrap">↩</button>
                 <button id="files-save" class="btn btn--primary" disabled>Save</button>
               </div>
+              <div id="files-image-tools" class="files__editor-tools hidden">
+                <button id="files-zoom-out" class="icon-btn" title="Zoom out (Ctrl+scroll)">－</button>
+                <span id="files-zoom" class="files__zoom">Fit</span>
+                <button id="files-zoom-in" class="icon-btn" title="Zoom in (Ctrl+scroll)">＋</button>
+                <button id="files-zoom-fit" class="btn btn--ghost" title="Fit to window (double-click)">Fit</button>
+                <button id="files-zoom-1x" class="btn btn--ghost" title="Actual size (double-click)">1:1</button>
+              </div>
             </div>
             <div id="files-editor" class="files__editor-cm"></div>
+            <div id="files-preview" class="files__preview hidden">
+              <img id="files-preview-img" class="files__preview-img" alt="" draggable="false" />
+            </div>
           </div>
         </div>
-        <div id="files-status" class="files__status"></div>
+        <div class="files__footer">
+          <div id="files-status" class="files__status"></div>
+          <div id="files-progress" class="files__progress hidden">
+            <div
+              id="files-progress-track"
+              class="files__progress-track"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            >
+              <div id="files-progress-fill" class="files__progress-fill"></div>
+            </div>
+            <span id="files-progress-text" class="files__progress-text"></span>
+            <button id="files-progress-cancel" class="btn btn--ghost" title="Stop after the current file">
+              Cancel
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 

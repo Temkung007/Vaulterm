@@ -4,6 +4,7 @@
 //! connection (host-key checked the same way as the terminal). The high-level
 //! helpers list a directory and read/write a file as UTF-8 text for the editor.
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use russh::client::Handle;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
@@ -15,6 +16,18 @@ use crate::store::KnownHost;
 
 /// Largest file we'll load into the in-app editor.
 const MAX_EDIT_BYTES: u64 = 2_000_000;
+
+/// Largest file we'll pull down whole for the in-app image preview. Higher than
+/// the editor's limit because photos are routinely megabytes, but still bounded:
+/// the bytes cross the IPC bridge base64-encoded (~4/3 the size) and are held in
+/// memory by the webview. Anything larger is a download, not a preview.
+const MAX_PREVIEW_BYTES: u64 = 20_000_000;
+
+/// Guard rails for the recursive folder walk. Neither is a policy limit on what
+/// you're allowed to download — they exist so a mistaken click on `/` reports a
+/// clear error instead of enumerating the whole server into memory.
+const MAX_WALK_FILES: usize = 20_000;
+const MAX_WALK_DEPTH: usize = 32;
 
 /// Join a POSIX directory path and a child name (SFTP is always `/`-separated).
 fn join_path(dir: &str, name: &str) -> String {
@@ -53,6 +66,30 @@ pub struct FileContent {
     /// mtime + size at read time — the baseline for the optimistic-lock on save.
     pub mtime: Option<u32>,
     pub size: u64,
+}
+
+/// One file found by [`SftpConn::walk`], ready to be turned into a transfer.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WalkEntry {
+    /// Absolute remote path.
+    pub path: String,
+    /// Path relative to the walked root, always `/`-separated — the caller
+    /// mirrors this under the local destination folder.
+    pub rel: String,
+    pub size: u64,
+}
+
+/// A file's raw bytes, base64-encoded for the JSON IPC hop. Used by the image
+/// preview, which needs the bytes verbatim rather than as (lossy) text.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryContent {
+    /// Standard base64 (padded, not URL-safe) — decodable with `atob` in the webview.
+    pub base64: String,
+    /// Number of bytes actually read (not the stat'd size).
+    pub size: u64,
+    pub mtime: Option<u32>,
 }
 
 /// Metadata reported back after a write so the caller can refresh its baseline.
@@ -151,6 +188,116 @@ impl SftpConn {
         Ok(FileContent { content, mtime: meta.mtime, size })
     }
 
+    /// Flatten a directory tree into the list of files under it.
+    ///
+    /// This is what turns "download this folder" into a set of ordinary file
+    /// transfers: the caller gets every path plus its size up front, so it can
+    /// show a real total and a progress bar rather than an open-ended spinner.
+    /// Empty sub-directories aren't reported — there's nothing to transfer for
+    /// them, so they simply don't appear locally.
+    pub async fn walk(&self, root: &str) -> Result<Vec<WalkEntry>, String> {
+        let mut out = Vec::new();
+        self.walk_into(root, "", 0, &mut out).await?;
+        Ok(out)
+    }
+
+    async fn walk_into(
+        &self,
+        dir: &str,
+        rel: &str,
+        depth: usize,
+        out: &mut Vec<WalkEntry>,
+    ) -> Result<(), String> {
+        if depth > MAX_WALK_DEPTH {
+            return Err(format!(
+                "folder nesting goes deeper than {MAX_WALK_DEPTH} levels — download it in parts"
+            ));
+        }
+        let entries = self.session.read_dir(dir).await.map_err(|e| e.to_string())?;
+        for e in entries {
+            let name = e.file_name();
+            // Belt and braces: a server that echoes "." / ".." would otherwise
+            // send the walk around in circles.
+            if name == "." || name == ".." {
+                continue;
+            }
+            let child = join_path(dir, &name);
+            let child_rel = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+            let ft = e.file_type();
+            // `read_dir` reports each entry's own (lstat) attributes, so a
+            // symlink never looks like a directory here. Resolve it once to find
+            // out: links to directories are skipped outright — following them
+            // risks a cycle, and queueing one as a "file" would just fail on
+            // every download attempt. Links to files transfer normally.
+            if ft.is_symlink() {
+                match self.session.metadata(child.clone()).await {
+                    Ok(m) if m.file_type().is_dir() => continue,
+                    // A broken link fails at transfer time; that's reported per
+                    // file rather than aborting the whole walk.
+                    _ => {}
+                }
+            }
+            if ft.is_dir() {
+                Box::pin(self.walk_into(&child, &child_rel, depth + 1, out)).await?;
+            } else {
+                if out.len() >= MAX_WALK_FILES {
+                    return Err(format!(
+                        "more than {MAX_WALK_FILES} files under this folder — download it in parts"
+                    ));
+                }
+                out.push(WalkEntry {
+                    path: child,
+                    rel: child_rel,
+                    size: e.metadata().size.unwrap_or(0),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Read a file's raw bytes (base64-encoded) for the image preview.
+    ///
+    /// Unlike [`read`](Self::read) this makes no attempt to decode the file as
+    /// text — images are binary by definition. The size is checked up front so
+    /// an accidental click on a huge file fails fast instead of streaming it,
+    /// and the read itself is capped too: the file could grow (or the server
+    /// could under-report `size`) between the stat and the read, and an
+    /// unbounded `read_to_end` would happily buffer all of it.
+    pub async fn read_binary(&self, path: &str) -> Result<BinaryContent, String> {
+        let meta = self.session.metadata(path).await.map_err(|e| e.to_string())?;
+        let size = meta.size.unwrap_or(0);
+        if size > MAX_PREVIEW_BYTES {
+            return Err(format!(
+                "file is too large to preview ({} MB, limit {} MB) — download it instead",
+                size / 1_000_000,
+                MAX_PREVIEW_BYTES / 1_000_000
+            ));
+        }
+        let file = self
+            .session
+            .open_with_flags(path, OpenFlags::READ)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut buf = Vec::with_capacity(size.min(MAX_PREVIEW_BYTES) as usize);
+        // Read one byte past the cap so an over-cap file is detected, not truncated
+        // into a corrupt half-image.
+        file.take(MAX_PREVIEW_BYTES + 1)
+            .read_to_end(&mut buf)
+            .await
+            .map_err(|e| e.to_string())?;
+        if buf.len() as u64 > MAX_PREVIEW_BYTES {
+            return Err(format!(
+                "file is too large to preview (over {} MB) — download it instead",
+                MAX_PREVIEW_BYTES / 1_000_000
+            ));
+        }
+        Ok(BinaryContent {
+            base64: STANDARD.encode(&buf),
+            size: buf.len() as u64,
+            mtime: meta.mtime,
+        })
+    }
+
     /// Overwrite a file with new UTF-8 text (truncates, creates if missing).
     ///
     /// Optimistic lock: unless `force` is set, the current server file is
@@ -227,7 +374,15 @@ impl SftpConn {
     }
 
     /// Download `remote` to a local path (streamed).
+    ///
+    /// Missing parent directories are created: a recursive folder download
+    /// mirrors the remote tree, and those sub-directories won't exist locally yet.
     pub async fn download(&self, remote: &str, local: &str) -> Result<(), String> {
+        if let Some(parent) = std::path::Path::new(local).parent() {
+            if !parent.as_os_str().is_empty() {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+            }
+        }
         let mut src = self
             .session
             .open_with_flags(remote, OpenFlags::READ)

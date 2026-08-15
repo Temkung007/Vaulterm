@@ -90,6 +90,8 @@ pub fn run() {
             commands::sftp_home,
             commands::sftp_list,
             commands::sftp_read,
+            commands::sftp_read_binary,
+            commands::sftp_walk,
             commands::sftp_write,
             commands::sftp_upload,
             commands::sftp_download,

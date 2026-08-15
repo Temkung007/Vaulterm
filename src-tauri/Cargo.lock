@@ -5504,7 +5504,7 @@ dependencies = [
 
 [[package]]
 name = "vaulterm"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "aes-gcm 0.10.3",
  "anyhow",
