@@ -85,6 +85,30 @@ function loadCollapsedGroups(): string[] {
   }
 }
 const collapsedGroups = new Set<string>(loadCollapsedGroups());
+
+export interface AppTheme {
+  id: string;
+  name: string;
+  termTheme: string;
+  previewBg: string;
+  previewAccent: string;
+}
+
+export const APP_THEMES: AppTheme[] = [
+  { id: "cyber", name: "Cyber Teal", termTheme: "Termkin Dark", previewBg: "#0a0e14", previewAccent: "#56ebb4" },
+  { id: "tokyo", name: "Tokyo Night", termTheme: "Tokyo Night", previewBg: "#16161e", previewAccent: "#bb9af7" },
+  { id: "obsidian", name: "Midnight Obsidian", termTheme: "Midnight Obsidian", previewBg: "#08090c", previewAccent: "#3b82f6" },
+  { id: "catppuccin", name: "Catppuccin Mocha", termTheme: "Catppuccin Mocha", previewBg: "#181825", previewAccent: "#cba6f7" },
+  { id: "nord", name: "Nord Frost", termTheme: "Nord Frost", previewBg: "#20242c", previewAccent: "#88c0d0" },
+  { id: "dracula", name: "Dracula", termTheme: "Dracula", previewBg: "#21222c", previewAccent: "#ff79c6" },
+  { id: "amber", name: "Amber Matrix", termTheme: "Amber Matrix", previewBg: "#090b09", previewAccent: "#ffb454" },
+  { id: "light", name: "Clean Studio", termTheme: "Clean Light", previewBg: "#ffffff", previewAccent: "#2563eb" },
+];
+
+let appTheme = localStorage.getItem("vaulterm.appTheme") || "cyber";
+if (!APP_THEMES.some((t) => t.id === appTheme)) appTheme = "cyber";
+let syncTermTheme = localStorage.getItem("vaulterm.syncTermTheme") !== "false";
+
 let termFontSize = Number(localStorage.getItem("vaulterm.fontSize")) || 14;
 let termTheme = localStorage.getItem("vaulterm.termTheme") || DEFAULT_THEME;
 // Fall back to the default if the saved theme no longer exists (e.g. the old
@@ -695,6 +719,69 @@ function setSettingsMsg(msg: string, ok: boolean): void {
   setMsgEl.classList.toggle("ok", ok);
 }
 
+function applyAppTheme(themeId: string, syncTerminal = syncTermTheme): void {
+  const theme = APP_THEMES.find((t) => t.id === themeId) ?? APP_THEMES[0];
+  appTheme = theme.id;
+  localStorage.setItem("vaulterm.appTheme", appTheme);
+  document.documentElement.setAttribute("data-theme", appTheme);
+  document.body.setAttribute("data-theme", appTheme);
+
+  // Update meta color-scheme
+  const metaColorScheme = document.querySelector('meta[name="color-scheme"]');
+  if (metaColorScheme) {
+    metaColorScheme.setAttribute("content", appTheme === "light" ? "light" : "dark");
+  }
+
+  // Synchronize terminal theme if enabled
+  if (syncTerminal && theme.termTheme in TERMINAL_THEMES) {
+    termTheme = theme.termTheme;
+    localStorage.setItem("vaulterm.termTheme", termTheme);
+    setTermThemeEl.value = termTheme;
+    applyTermPrefs();
+  }
+
+  // Update settings inputs if present
+  const setAppThemeEl = document.getElementById("set-apptheme") as HTMLSelectElement | null;
+  if (setAppThemeEl) setAppThemeEl.value = appTheme;
+
+  // Update active swatch
+  const swatches = document.querySelectorAll(".theme-swatch-card");
+  swatches.forEach((sw) => {
+    sw.classList.toggle("active", (sw as HTMLElement).dataset.theme === appTheme);
+  });
+}
+
+function cycleAppTheme(): void {
+  const currentIndex = APP_THEMES.findIndex((t) => t.id === appTheme);
+  const nextIndex = (currentIndex + 1) % APP_THEMES.length;
+  const nextTheme = APP_THEMES[nextIndex];
+  applyAppTheme(nextTheme.id);
+  toast(`Theme: ${nextTheme.name}`, "info", 1800);
+}
+
+function renderThemeSwatches(): void {
+  const container = document.getElementById("theme-swatches");
+  if (!container) return;
+  container.replaceChildren(
+    ...APP_THEMES.map((theme) => {
+      const card = el("div", "theme-swatch-card");
+      card.dataset.theme = theme.id;
+      if (theme.id === appTheme) card.classList.add("active");
+
+      const preview = el("div", "theme-swatch-card__preview");
+      preview.style.background = `linear-gradient(135deg, ${theme.previewBg} 60%, ${theme.previewAccent} 60%)`;
+
+      const label = el("span", "theme-swatch-card__label", theme.name);
+
+      card.append(preview, label);
+      card.addEventListener("click", () => {
+        applyAppTheme(theme.id);
+      });
+      return card;
+    }),
+  );
+}
+
 function openSettings(): void {
   setMsgEl.classList.add("hidden");
   setAutolockEl.value = String(autoLockMinutes);
@@ -707,6 +794,11 @@ function openSettings(): void {
   cpCurrentEl.value = "";
   cpNewEl.value = "";
   cpNew2El.value = "";
+  const setAppThemeEl = document.getElementById("set-apptheme") as HTMLSelectElement | null;
+  if (setAppThemeEl) setAppThemeEl.value = appTheme;
+  const setSyncTermEl = document.getElementById("set-sync-termtheme") as HTMLInputElement | null;
+  if (setSyncTermEl) setSyncTermEl.checked = syncTermTheme;
+  renderThemeSwatches();
   setFontSizeEl.value = String(termFontSize);
   setTermThemeEl.value = termTheme;
   $<HTMLInputElement>("set-pet").checked = pet.enabled;
@@ -949,6 +1041,40 @@ function bindUi(): void {
   $("btn-new").addEventListener("click", () => modal.openNew());
   $("btn-new-2").addEventListener("click", () => modal.openNew());
   $("btn-cmds").addEventListener("click", () => palette.toggle());
+  document.getElementById("btn-empty-palette")?.addEventListener("click", () => palette.toggle());
+
+  // Interactive Magic UI Bento Cards
+  document.getElementById("bento-card-term")?.addEventListener("click", () => modal.openNew());
+  document.getElementById("bento-card-files")?.addEventListener("click", () => {
+    if (activeSessionId) {
+      const open = sessions.get(activeSessionId);
+      if (open) {
+        return void filesBrowser.open(open.session.connection);
+      }
+    }
+    if (connections.length > 0) {
+      void filesBrowser.open(connections[0]);
+    } else {
+      toast("Create a connection first to explore remote files", "info");
+    }
+  });
+  document.getElementById("bento-card-tunnels")?.addEventListener("click", () => {
+    if (activeSessionId) {
+      const open = sessions.get(activeSessionId);
+      if (open) {
+        return void tunnels.open(open.session.connection);
+      }
+    }
+    if (connections.length > 0) {
+      void tunnels.open(connections[0]);
+    } else {
+      toast("Create a connection first to configure tunnels", "info");
+    }
+  });
+  document.getElementById("bento-card-mcp")?.addEventListener("click", () => {
+    openSettings();
+    document.getElementById("mcp-enabled")?.scrollIntoView({ behavior: "smooth" });
+  });
   $("btn-lock").addEventListener("click", () => void lockApp());
   $("btn-settings").addEventListener("click", openSettings);
   $("set-save").addEventListener("click", () => void handleSaveSettings());
@@ -990,6 +1116,20 @@ function bindUi(): void {
     localStorage.setItem("vaulterm.termTheme", termTheme);
     applyTermPrefs();
   });
+  $("btn-theme-quick").addEventListener("click", cycleAppTheme);
+  const setAppThemeEl = $<HTMLSelectElement>("set-apptheme");
+  setAppThemeEl.addEventListener("change", () => {
+    applyAppTheme(setAppThemeEl.value);
+  });
+  const setSyncTermEl = $<HTMLInputElement>("set-sync-termtheme");
+  setSyncTermEl.addEventListener("change", () => {
+    syncTermTheme = setSyncTermEl.checked;
+    localStorage.setItem("vaulterm.syncTermTheme", String(syncTermTheme));
+    if (syncTermTheme) {
+      applyAppTheme(appTheme, true);
+    }
+  });
+  applyAppTheme(appTheme, false);
   $("set-pet").addEventListener("change", (e) => {
     pet.setEnabled((e.currentTarget as HTMLInputElement).checked);
   });
@@ -1114,6 +1254,12 @@ async function init(): Promise<void> {
   bindUi();
   mountEmptyStateMascot();
   installCloseGuard();
+  if (new URLSearchParams(window.location.search).get("preview") === "app") {
+    appEl.classList.remove("hidden");
+    lockScreenEl.classList.add("hidden");
+    renderSidebar();
+    return;
+  }
   try {
     const status = await api.vaultStatus();
     if (status.unlocked) await enterApp();

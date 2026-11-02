@@ -31,6 +31,8 @@ pub struct AppState {
     pub tunnels: Mutex<HashMap<String, Tunnel>>,
     /// The running local MCP server (AI access), if enabled + vault unlocked.
     pub mcp: Mutex<Option<mcp::McpHandle>>,
+    /// Serialize asynchronous MCP starts so concurrent UI requests share one server.
+    pub mcp_start_lock: tokio::sync::Mutex<()>,
     /// Pending MCP dangerous-tool confirmations awaiting the user's decision.
     pub mcp_pending: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
 }
@@ -118,6 +120,7 @@ pub fn run() {
             // releases any server-side -R forward.
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 if let Some(state) = app_handle.try_state::<AppState>() {
+                    commands::stop_mcp(&state);
                     let drained: Vec<Tunnel> =
                         state.tunnels.lock().unwrap().drain().map(|(_, t)| t).collect();
                     for t in &drained {

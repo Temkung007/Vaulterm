@@ -13,6 +13,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use russh::client::{self, Config, Handle, Handler, Msg};
 use russh::keys::{decode_secret_key, load_secret_key, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
 use russh::{Channel, ChannelMsg};
+use serde::Serialize;
 use tauri::ipc::Channel as IpcChannel;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -334,6 +335,146 @@ pub(crate) async fn run_exec(
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
+/// Machine-readable result for MCP/CLI callers. A missing exit status is not
+/// assumed successful: some servers close the channel without sending one.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExecOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<u32>,
+    pub signal: Option<String>,
+    pub truncated: bool,
+    pub timed_out: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdin_error: Option<String>,
+}
+
+impl ExecOutput {
+    pub fn is_error(&self) -> bool {
+        self.exit_code != Some(0)
+            || self.signal.is_some()
+            || self.truncated
+            || self.timed_out
+            || self.stdin_error.is_some()
+    }
+}
+
+/// Keep the byte limit shared between stdout/stderr, including when a server
+/// sends one packet larger than the entire limit.
+#[derive(Default)]
+struct ExecCapture {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    truncated: bool,
+}
+
+impl ExecCapture {
+    fn push(&mut self, bytes: &[u8], stderr: bool, limit: usize) {
+        let remaining = limit.saturating_sub(self.stdout.len() + self.stderr.len());
+        let accepted = bytes.len().min(remaining);
+        let dest = if stderr {
+            &mut self.stderr
+        } else {
+            &mut self.stdout
+        };
+        dest.extend_from_slice(&bytes[..accepted]);
+        self.truncated |= accepted < bytes.len();
+    }
+
+    fn finish(self, mut result: ExecOutput) -> ExecOutput {
+        result.stdout = String::from_utf8_lossy(&self.stdout).into_owned();
+        result.stderr = String::from_utf8_lossy(&self.stderr).into_owned();
+        result.truncated = self.truncated;
+        result
+    }
+}
+
+/// Execute on an authenticated handle, retaining stderr and the remote exit
+/// status. Timeout/output limits close the channel and return partial output.
+/// Closing the SSH channel is best-effort cancellation; remote programs may
+/// deliberately detach themselves from the SSH session.
+pub(crate) async fn exec_report(
+    handle: &Handle<ClientHandler>,
+    command: &str,
+    input: Option<&[u8]>,
+    timeout: Duration,
+    max_output_bytes: usize,
+) -> Result<ExecOutput, SshConnectError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut capture = ExecCapture::default();
+    let mut result = ExecOutput::default();
+    let channel = match tokio::time::timeout(timeout, handle.channel_open_session()).await {
+        Ok(result) => result.map_err(|e| SshConnectError::Other(e.to_string()))?,
+        Err(_) => {
+            return Ok(ExecOutput {
+                timed_out: true,
+                ..Default::default()
+            })
+        }
+    };
+    let (mut reader, writer) = channel.split();
+    let run = async {
+        writer
+            .exec(true, command.as_bytes())
+            .await
+            .map_err(|e| SshConnectError::Other(e.to_string()))?;
+        // Read while writing: a server may report a failed redirection before
+        // consuming stdin, or fill its output window while reading a big file.
+        let send_input = async {
+            if let Some(input) = input {
+                writer.data(input).await?;
+            }
+            writer.eof().await
+        };
+        tokio::pin!(send_input);
+        let mut input_sent = false;
+        loop {
+            let message = tokio::select! {
+                biased;
+                sent = &mut send_input, if !input_sent => {
+                    input_sent = true;
+                    if let Err(error) = sent { result.stdin_error = Some(error.to_string()); }
+                    continue;
+                }
+                message = reader.wait() => match message { Some(message) => message, None => break },
+            };
+            match message {
+                ChannelMsg::Data { data } => capture.push(&data, false, max_output_bytes),
+                ChannelMsg::ExtendedData { data, .. } => {
+                    capture.push(&data, true, max_output_bytes)
+                }
+                ChannelMsg::ExitStatus { exit_status } => result.exit_code = Some(exit_status),
+                ChannelMsg::ExitSignal { signal_name, .. } => {
+                    result.signal = Some(format!("{signal_name:?}"))
+                }
+                ChannelMsg::Failure => {
+                    return Err(SshConnectError::Other(
+                        "server rejected the SSH exec request".into(),
+                    ))
+                }
+                ChannelMsg::Close => break,
+                // EOF only ends the data stream; the exit status may follow.
+                _ => {}
+            }
+            if capture.truncated {
+                break;
+            }
+        }
+        if input.is_some() && !input_sent && result.exit_code == Some(0) {
+            result.stdin_error = Some("server closed before all stdin was sent".into());
+        }
+        Ok(())
+    };
+    match tokio::time::timeout_at(deadline, run).await {
+        Ok(r) => r?,
+        Err(_) => result.timed_out = true,
+    }
+    // Never wait indefinitely while trying to cancel an unresponsive peer.
+    let _ = tokio::time::timeout(Duration::from_secs(1), writer.close()).await;
+    Ok(capture.finish(result))
+}
+
 async fn open_shell(handle: &mut Handle<ClientHandler>, cols: u32, rows: u32) -> anyhow::Result<Channel<Msg>> {
     let channel = handle.channel_open_session().await?;
     channel
@@ -398,9 +539,62 @@ pub(crate) async fn pump(
 }
 
 #[cfg(test)]
+#[path = "ssh_exec_tests.rs"]
+mod exec_tests;
+
+#[cfg(test)]
 mod tests {
-    use super::decode_secret_key;
+    use super::{decode_secret_key, ExecCapture, ExecOutput};
     use std::{env, fs};
+
+    #[test]
+    fn exec_capture_bounds_combined_streams_and_preserves_partial_output() {
+        let mut capture = ExecCapture::default();
+        capture.push(b"stdout", false, 10);
+        capture.push(b"error details", true, 10);
+        capture.push(b"more", false, 10);
+        let result = capture.finish(ExecOutput {
+            exit_code: Some(0),
+            ..Default::default()
+        });
+        assert_eq!(result.stdout, "stdout");
+        assert_eq!(result.stderr, "erro");
+        assert!(result.truncated);
+        assert!(
+            result.is_error(),
+            "truncated success must be reported incomplete"
+        );
+        let mut exact = ExecCapture::default();
+        exact.push(b"abc", false, 3);
+        assert!(!exact.finish(ExecOutput::default()).truncated);
+    }
+
+    #[test]
+    fn missing_status_timeout_signal_and_nonzero_are_not_success() {
+        assert!(ExecOutput::default().is_error());
+        assert!(ExecOutput {
+            exit_code: Some(3),
+            ..Default::default()
+        }
+        .is_error());
+        assert!(ExecOutput {
+            exit_code: Some(0),
+            timed_out: true,
+            ..Default::default()
+        }
+        .is_error());
+        assert!(ExecOutput {
+            exit_code: Some(0),
+            signal: Some("TERM".into()),
+            ..Default::default()
+        }
+        .is_error());
+        assert!(!ExecOutput {
+            exit_code: Some(0),
+            ..Default::default()
+        }
+        .is_error());
+    }
 
     #[test]
     fn decode_pasted_openssh_keys() {
@@ -410,7 +604,8 @@ mod tests {
         }
         if let (Ok(path), Ok(pass)) = (env::var("TR_TEST_KEY_ENC"), env::var("TR_TEST_PASS")) {
             let pem = fs::read_to_string(&path).expect("read encrypted key");
-            decode_secret_key(&pem, Some(&pass)).expect("encrypted key should decode with passphrase");
+            decode_secret_key(&pem, Some(&pass))
+                .expect("encrypted key should decode with passphrase");
             assert!(
                 decode_secret_key(&pem, None).is_err(),
                 "encrypted key must NOT decode without a passphrase",

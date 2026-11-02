@@ -22,7 +22,7 @@ export const MONSTER_COLORS: { id: MonsterColor; label: string }[] = [
 ];
 
 const COATS: Record<MonsterColor, { O: string; D: string; W: string }> = {
-  teal: { O: "#3fd0c4", D: "#268f86", W: "#d7f7f2" },
+  teal: { O: "#56ebb4", D: "#289b74", W: "#dffff3" },
   grape: { O: "#a78bfa", D: "#7355c9", W: "#ece5ff" },
   slime: { O: "#7bd66a", D: "#4f9d43", W: "#e6f8df" },
   ember: { O: "#f0894e", D: "#c8632c", W: "#ffe1cd" },

@@ -100,6 +100,7 @@ pub fn vault_unlock(state: State<'_, AppState>, password: String) -> Result<(), 
 #[tauri::command]
 pub fn vault_lock(state: State<'_, AppState>) {
     state.vault.lock();
+    stop_mcp(&state);
 }
 
 #[tauri::command]
@@ -123,7 +124,9 @@ pub fn vault_export(state: State<'_, AppState>, dest_path: String) -> Result<(),
 /// Restore a backup over the current vault (then re-lock).
 #[tauri::command]
 pub fn vault_import(state: State<'_, AppState>, src_path: String) -> Result<(), String> {
-    state.vault.import_from(&src_path).map_err(|e| e.to_string())
+    state.vault.import_from(&src_path).map_err(|e| e.to_string())?;
+    stop_mcp(&state);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -685,7 +688,7 @@ pub fn mcp_status(state: State<'_, AppState>) -> Result<McpStatus, String> {
     mcp_snapshot(&state)
 }
 
-/// Enable/disable the MCP server: persist the choice and (re)start or stop it.
+/// Enable/disable the MCP server: persist the choice and start or stop it.
 /// A token is generated on first enable.
 #[tauri::command]
 pub async fn mcp_set_enabled(
@@ -693,40 +696,51 @@ pub async fn mcp_set_enabled(
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<McpStatus, String> {
+    let _start = state.mcp_start_lock.lock().await;
     let token = state
         .vault
         .write(|d| {
             d.settings.mcp_enabled = enabled;
-            if d.settings.mcp_token.is_none() {
+            if enabled && d.settings.mcp_token.is_none() {
                 d.settings.mcp_token = Some(mcp::generate_token());
             }
-            d.settings.mcp_token.clone().unwrap()
+            d.settings.mcp_token.clone()
         })
         .map_err(|e| e.to_string())?;
 
-    // Stop any existing server (drop the lock before awaiting).
-    let old = state.mcp.lock().unwrap().take();
-    if let Some(h) = old {
-        h.stop();
-    }
-    if enabled {
-        let handle = mcp::start(app, token).await?;
-        *state.mcp.lock().unwrap() = Some(handle);
+    if !enabled {
+        stop_mcp(&state);
+    } else if state.mcp.lock().unwrap().is_none() {
+        start_mcp(app, &state, token.expect("enabled MCP has a token")).await?;
     }
     mcp_snapshot(&state)
 }
 
 /// Start the MCP server if it's enabled in settings (called after unlock).
 #[tauri::command]
-pub async fn mcp_autostart(app: AppHandle, state: State<'_, AppState>) -> Result<McpStatus, String> {
+pub async fn mcp_autostart(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<McpStatus, String> {
+    let _start = state.mcp_start_lock.lock().await;
     let (enabled, token) = state
         .vault
         .read(|d| (d.settings.mcp_enabled, d.settings.mcp_token.clone()))
         .map_err(|e| e.to_string())?;
     let need_start = enabled && state.mcp.lock().unwrap().is_none();
     if need_start {
-        let handle = mcp::start(app, token.unwrap_or_else(mcp::generate_token)).await?;
-        *state.mcp.lock().unwrap() = Some(handle);
+        let token = match token {
+            Some(token) => token,
+            None => state
+                .vault
+                .write(|d| {
+                    let token = mcp::generate_token();
+                    d.settings.mcp_token = Some(token.clone());
+                    token
+                })
+                .map_err(|e| e.to_string())?,
+        };
+        start_mcp(app, &state, token).await?;
     }
     mcp_snapshot(&state)
 }
@@ -734,10 +748,37 @@ pub async fn mcp_autostart(app: AppHandle, state: State<'_, AppState>) -> Result
 /// Stop the MCP server without changing the enabled setting (called on lock).
 #[tauri::command]
 pub fn mcp_stop(state: State<'_, AppState>) {
+    stop_mcp(&state);
+}
+
+/// Drop every pending approval and cancel active MCP requests together.
+pub(crate) fn stop_mcp(state: &AppState) {
     let old = state.mcp.lock().unwrap().take();
     if let Some(h) = old {
         h.stop();
     }
+    for (_, tx) in state.mcp_pending.lock().unwrap().drain() {
+        let _ = tx.send(false);
+    }
+}
+
+/// A lock or disable can happen while binding the socket. Never publish a server
+/// for vault state that changed during that await.
+async fn start_mcp(app: AppHandle, state: &AppState, token: String) -> Result<(), String> {
+    let handle = mcp::start(app, token.clone()).await?;
+    let mut running = state.mcp.lock().unwrap();
+    let still_enabled = state
+        .vault
+        .read(|d| d.settings.mcp_enabled && d.settings.mcp_token.as_deref() == Some(token.as_str()))
+        .unwrap_or(false);
+    if !still_enabled {
+        handle.stop();
+        return Err(
+            "MCP startup cancelled because the vault was locked or settings changed".into(),
+        );
+    }
+    *running = Some(handle);
+    Ok(())
 }
 
 /// Answer a pending dangerous-tool confirmation raised by the MCP server.
@@ -745,5 +786,37 @@ pub fn mcp_stop(state: State<'_, AppState>) {
 pub fn mcp_confirm_respond(state: State<'_, AppState>, id: String, allow: bool) {
     if let Some(tx) = state.mcp_pending.lock().unwrap().remove(&id) {
         let _ = tx.send(allow);
+    }
+}
+
+#[cfg(test)]
+mod mcp_lifecycle_tests {
+    use super::stop_mcp;
+    use crate::AppState;
+
+    #[test]
+    fn stopping_mcp_denies_and_removes_all_pending_approvals() {
+        let state = AppState::default();
+        let (first_tx, mut first_rx) = tokio::sync::oneshot::channel();
+        let (second_tx, mut second_rx) = tokio::sync::oneshot::channel();
+        state
+            .mcp_pending
+            .lock()
+            .unwrap()
+            .insert("first".into(), first_tx);
+        state
+            .mcp_pending
+            .lock()
+            .unwrap()
+            .insert("second".into(), second_tx);
+
+        stop_mcp(&state);
+
+        assert_eq!(first_rx.try_recv(), Ok(false));
+        assert_eq!(second_rx.try_recv(), Ok(false));
+        assert!(state.mcp_pending.lock().unwrap().is_empty());
+        assert!(state.mcp.lock().unwrap().is_none());
+        // UI lock and the explicit stop command can both run during teardown.
+        stop_mcp(&state);
     }
 }

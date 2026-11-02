@@ -25,7 +25,10 @@ A small desktop **SSH terminal** that remembers your connections — guarded by
   save is blocked until you explicitly override it (no silent lost updates)
 - 🖥️ Real interactive shell over SSH with a proper PTY (vim, htop, colors, resize)
 - 🗂️ Multiple sessions in tabs
-- 💾 Connection metadata persisted as JSON in your per-user config dir
+- 💾 Connections and settings persisted in the encrypted vault in your per-user config dir
+- 🤖 **CLI for AI agents and scripts** — JSON results, discoverable command/tool
+  schemas, stdin input, bounded SSH execution, and remote stdout/stderr/exit
+  status. Uses the desktop app's MCP server and encrypted connections.
 
 ## Tech
 
@@ -58,6 +61,25 @@ pnpm tauri dev      # hot-reloading dev build
 pnpm tauri build    # outputs to src-tauri/target/release/bundle/
 ```
 
+## CLI and AI agents
+
+Requires Node.js 22 or later. Open Termkin, unlock the vault, and enable
+**Settings → MCP server (AI access)**. Supply the bearer token shown there via
+`TERMKIN_TOKEN`, a token file, or CLI config, then run:
+
+```sh
+node cli/termkin.mjs --help
+node cli/termkin.mjs schema
+node cli/termkin.mjs doctor
+node cli/termkin.mjs connections list
+node cli/termkin.mjs exec staging --command "uname -a"
+```
+
+Results are JSON by default; use `--text` for readable output. Executing commands
+and writing files require approval in the desktop app. Run `npm link` to install
+the local `termkin` command, or use `pnpm cli`. See the [CLI guide](docs/CLI.md)
+for setup, command reference, exit statuses, and AI agent usage.
+
 ## How it works
 
 ```
@@ -87,12 +109,15 @@ pnpm tauri build    # outputs to src-tauri/target/release/bundle/
 
 ```
 index.html, src/        frontend (main.ts, terminal.ts, connections.ts, snippets.ts, api.ts)
+cli/termkin.mjs         Node CLI for scripts and AI agents
+docs/CLI.md             CLI setup, reference, and agent guidance
 src-tauri/src/
   lib.rs                Tauri builder + shared state
   commands.rs           #[tauri::command] bridge (vault-gated)
   vault.rs              Argon2id + AES-256-GCM encrypted vault
   store.rs              shared data types
   ssh.rs                russh connect/auth + per-session pump task
+  mcp.rs                authenticated local MCP server used by the CLI
 ```
 
 ## Security notes
@@ -101,7 +126,9 @@ src-tauri/src/
   forget it, the encrypted data cannot be decrypted. The auth tag (AES-GCM) is
   what tells a wrong password from a right one — there is no stored hash to leak.
 - Locking (🔒 / `Ctrl+L`) closes all live SSH sessions and zeroizes the key.
-- **Host-key verification is trust-on-first-use accept-all** right now
-  (`ssh.rs::check_server_key` returns `Ok(true)`). For untrusted networks you
-  should compare against a `known_hosts` / TOFU store before accepting. This is
-  the one deliberate shortcut — see the comment in `ssh.rs`.
+- **Host-key verification uses trust on first use.** First-seen keys are saved in
+  the encrypted vault. Changed keys are rejected; review them in the desktop
+  app before explicitly trusting a replacement.
+- The CLI's MCP bearer token grants access to the unlocked app. Store it as a
+  credential. The MCP server binds to loopback, and command execution and file
+  writes require approval in the desktop app.
