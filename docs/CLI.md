@@ -78,8 +78,10 @@ credentials. Treat that config as a credential file; do not commit it. Use
 Use a connection's exact ID or its case-insensitive name. When names are
 ambiguous, use the ID from `connections list`.
 
-`exec` and `files write` ask for approval in the desktop app. Approval can take
-up to 120 seconds. There is no CLI flag that bypasses it.
+By default, `exec` and `files write` ask for approval in the desktop app (up to
+120 seconds), unless **Settings → MCP server → Approval mode** is set to
+session-allow or auto-approve. There is no CLI flag that bypasses the desktop
+app's setting.
 
 File tools use commands on a POSIX remote shell. Directory listings are `ls`
 text in `stdout`; they are not arrays of file entries. File reads and writes are

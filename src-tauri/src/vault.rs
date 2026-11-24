@@ -602,6 +602,7 @@ mod tests {
             auto_lock_minutes: 15,
             mcp_enabled: true,
             mcp_token: Some("tok".into()),
+            mcp_approval_mode: crate::store::McpApprovalMode::Session,
         };
 
         let bytes = VaultDataPb::from(&data).encode_to_vec();
@@ -633,6 +634,10 @@ mod tests {
         assert_eq!(back.known_hosts[0].fingerprint, "SHA256:x");
         assert_eq!(back.settings.auto_lock_minutes, 15);
         assert!(back.settings.mcp_enabled);
+        assert_eq!(
+            back.settings.mcp_approval_mode,
+            crate::store::McpApprovalMode::Session
+        );
         assert_eq!(back.settings.mcp_token.as_deref(), Some("tok"));
     }
 }

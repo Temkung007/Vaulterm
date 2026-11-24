@@ -316,11 +316,15 @@ export function tunnelStopAll(): Promise<void> {
 
 // ---- MCP server (AI access) -------------------------------------------------
 
+export type McpApprovalMode = "ask" | "session" | "auto";
+
 export interface McpStatus {
   enabled: boolean;
   running: boolean;
   port: number;
   token?: string | null;
+  approvalMode: McpApprovalMode;
+  trustedConnectionCount: number;
 }
 export function mcpStatus(): Promise<McpStatus> {
   return invoke("mcp_status");
@@ -328,20 +332,31 @@ export function mcpStatus(): Promise<McpStatus> {
 export function mcpSetEnabled(enabled: boolean): Promise<McpStatus> {
   return invoke("mcp_set_enabled", { enabled });
 }
+export function mcpSetApprovalMode(mode: McpApprovalMode): Promise<McpStatus> {
+  return invoke("mcp_set_approval_mode", { mode });
+}
+export function mcpClearTrusted(): Promise<McpStatus> {
+  return invoke("mcp_clear_trusted");
+}
 export function mcpAutostart(): Promise<McpStatus> {
   return invoke("mcp_autostart");
 }
 export function mcpStop(): Promise<void> {
   return invoke("mcp_stop");
 }
-export function mcpConfirmRespond(id: string, allow: boolean): Promise<void> {
-  return invoke("mcp_confirm_respond", { id, allow });
+export function mcpConfirmRespond(
+  id: string,
+  allow: boolean,
+  trustConnection = false,
+): Promise<void> {
+  return invoke("mcp_confirm_respond", { id, allow, trustConnection });
 }
 
 /** A dangerous MCP tool call awaiting the user's approval. */
 export interface McpConfirm {
   id: string;
   connection: string;
+  connectionId: string;
   action: string;
   detail: string;
 }

@@ -13,7 +13,7 @@
 //! Compatibility rule: field tags are permanent. Add new fields with new tags;
 //! never renumber or reuse a tag, or existing vaults will decode incorrectly.
 
-use crate::store::{AuthType, ConnAction, Connection, KnownHost, Settings, Snippet};
+use crate::store::{AuthType, ConnAction, Connection, KnownHost, McpApprovalMode, Settings, Snippet};
 use crate::vault::VaultData;
 
 // ---------------------------------------------------------------------------
@@ -132,6 +132,16 @@ pub struct SettingsPb {
     pub mcp_enabled: bool,
     #[prost(string, optional, tag = "3")]
     pub mcp_token: Option<String>,
+    #[prost(enumeration = "McpApprovalModePb", tag = "4")]
+    pub mcp_approval_mode: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum McpApprovalModePb {
+    Ask = 0,
+    Session = 1,
+    Auto = 2,
 }
 
 /// proto3 enums require a zero-valued default variant, hence `Password = 0`.
@@ -262,22 +272,47 @@ impl From<KnownHostPb> for KnownHost {
     }
 }
 
+impl From<McpApprovalMode> for McpApprovalModePb {
+    fn from(m: McpApprovalMode) -> Self {
+        match m {
+            McpApprovalMode::Ask => McpApprovalModePb::Ask,
+            McpApprovalMode::Session => McpApprovalModePb::Session,
+            McpApprovalMode::Auto => McpApprovalModePb::Auto,
+        }
+    }
+}
+
+impl From<McpApprovalModePb> for McpApprovalMode {
+    fn from(m: McpApprovalModePb) -> Self {
+        match m {
+            McpApprovalModePb::Ask => McpApprovalMode::Ask,
+            McpApprovalModePb::Session => McpApprovalMode::Session,
+            McpApprovalModePb::Auto => McpApprovalMode::Auto,
+        }
+    }
+}
+
 impl From<&Settings> for SettingsPb {
     fn from(s: &Settings) -> Self {
         SettingsPb {
             auto_lock_minutes: s.auto_lock_minutes,
             mcp_enabled: s.mcp_enabled,
             mcp_token: s.mcp_token.clone(),
+            mcp_approval_mode: McpApprovalModePb::from(s.mcp_approval_mode) as i32,
         }
     }
 }
 
 impl From<SettingsPb> for Settings {
     fn from(p: SettingsPb) -> Self {
+        let mcp_approval_mode = McpApprovalModePb::try_from(p.mcp_approval_mode)
+            .unwrap_or(McpApprovalModePb::Ask)
+            .into();
         Settings {
             auto_lock_minutes: p.auto_lock_minutes,
             mcp_enabled: p.mcp_enabled,
             mcp_token: p.mcp_token,
+            mcp_approval_mode,
         }
     }
 }

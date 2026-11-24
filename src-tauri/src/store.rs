@@ -95,6 +95,19 @@ pub struct KnownHost {
     pub algo: String,
 }
 
+/// Approval policy for mutating MCP tool calls (`run_command`, `write_file`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum McpApprovalMode {
+    /// Prompt in the desktop UI on every call unless allowed for the session.
+    #[default]
+    Ask,
+    /// Prompt once per connection while unlocked, then remember for the session.
+    Session,
+    /// Auto-allow mutating MCP calls without showing a confirmation modal.
+    Auto,
+}
+
 /// User preferences (persisted in the vault).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,6 +122,9 @@ pub struct Settings {
     /// persisted so the client config stays valid across launches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_token: Option<String>,
+    /// Approval policy for `run_command` / `write_file` calls over MCP.
+    #[serde(default)]
+    pub mcp_approval_mode: McpApprovalMode,
 }
 
 #[cfg(test)]

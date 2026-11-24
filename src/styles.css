@@ -2250,6 +2250,12 @@ textarea:focus-visible {
   font-family: var(--mono);
   font-size: 12px;
 }
+.mcp-trusted-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .mcp-confirm__detail {
   max-height: 240px;
   overflow: auto;

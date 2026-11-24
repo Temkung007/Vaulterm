@@ -4,8 +4,8 @@
 
 use crate::commands::resolve_chain;
 use crate::ssh::{self, ExecOutput, SshConnectError};
-use crate::store::Connection;
-use crate::AppState;
+use crate::store::{Connection, McpApprovalMode};
+use crate::{AppState, PendingMcpConfirm};
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::{HeaderMap, StatusCode},
@@ -132,7 +132,7 @@ async fn handle(State(ctx): State<Ctx>, headers: HeaderMap, Json(req): Json<Valu
         "initialize" => Json(json!({"jsonrpc":"2.0","id":id,"result":{
             "protocolVersion":PROTOCOL_VERSION,"capabilities":{"tools":{}},
             "serverInfo":{"name":"termkin","version":env!("CARGO_PKG_VERSION")},
-            "instructions":"Saved SSH connections are available without revealing credentials. Use connection ids when names are ambiguous. run_command and write_file require approval in the Termkin window. Inspect structuredContent.exitCode, timedOut and truncated."
+            "instructions":"Saved SSH connections are available without revealing credentials. Use connection ids when names are ambiguous. run_command and write_file may require approval in the Termkin window depending on user approval settings. Inspect structuredContent.exitCode, timedOut and truncated."
         }})).into_response(),
         "ping" => Json(json!({"jsonrpc":"2.0","id":id,"result":{}})).into_response(),
         "tools/list" => Json(json!({"jsonrpc":"2.0","id":id,"result":{"tools":tool_defs()}})).into_response(),
@@ -330,7 +330,7 @@ async fn execute_tool(ctx: &Ctx, name: &str, args: &Value) -> Result<Value, Tool
     }
     let connection = args["connection"].as_str().unwrap();
     // Reject uncertain targets before displaying any approval prompt.
-    let id = resolve_connection(&ctx.app.state::<AppState>(), connection)?;
+    let (id, conn_label) = resolve_connection(&ctx.app.state::<AppState>(), connection)?;
     let path = args["path"].as_str().unwrap_or(".");
     let command = match name {
         "server_status" => STATUS_CMD.to_string(),
@@ -343,7 +343,7 @@ async fn execute_tool(ctx: &Ctx, name: &str, args: &Value) -> Result<Value, Tool
         ),
         "run_command" => {
             let command = args["command"].as_str().unwrap();
-            if !confirm(ctx, &id, "run_command", command).await {
+            if !confirm(ctx, &id, &conn_label, "run_command", command).await {
                 return Err(ToolError::new(
                     "approval_denied",
                     "denied or approval timed out in Termkin",
@@ -353,7 +353,15 @@ async fn execute_tool(ctx: &Ctx, name: &str, args: &Value) -> Result<Value, Tool
         }
         "write_file" => {
             let content = args["content"].as_str().unwrap();
-            if !confirm(ctx, &id, "write_file", &format!("{path}\n\n{content}")).await {
+            if !confirm(
+                ctx,
+                &id,
+                &conn_label,
+                "write_file",
+                &format!("{path}\n\n{content}"),
+            )
+            .await
+            {
                 return Err(ToolError::new(
                     "approval_denied",
                     "denied or approval timed out in Termkin",
@@ -416,10 +424,20 @@ fn find_connection<'a>(
     Ok(first)
 }
 
-fn resolve_connection(state: &AppState, key: &str) -> Result<String, ToolError> {
+fn connection_label(c: &Connection) -> String {
+    if c.name.trim().is_empty() {
+        format!("{}@{}", c.username, c.host)
+    } else {
+        c.name.clone()
+    }
+}
+
+fn resolve_connection(state: &AppState, key: &str) -> Result<(String, String), ToolError> {
     state
         .vault
-        .read(|d| find_connection(&d.connections, key).map(|c| c.id.clone()))
+        .read(|d| {
+            find_connection(&d.connections, key).map(|c| (c.id.clone(), connection_label(c)))
+        })
         .map_err(|e| ToolError::new("vault_locked", e.to_string()))?
 }
 
@@ -509,15 +527,41 @@ impl Drop for PendingConfirmation {
             .remove(&self.id);
     }
 }
-async fn confirm(ctx: &Ctx, connection: &str, action: &str, detail: &str) -> bool {
+fn should_auto_approve(state: &AppState, connection_id: &str) -> bool {
+    let mode = state
+        .vault
+        .read(|d| d.settings.mcp_approval_mode)
+        .unwrap_or_default();
+    match mode {
+        McpApprovalMode::Auto => true,
+        McpApprovalMode::Session | McpApprovalMode::Ask => state
+            .mcp_trusted_connections
+            .lock()
+            .unwrap()
+            .contains(connection_id),
+    }
+}
+
+async fn confirm(
+    ctx: &Ctx,
+    connection_id: &str,
+    connection_label: &str,
+    action: &str,
+    detail: &str,
+) -> bool {
+    let state = ctx.app.state::<AppState>();
+    if should_auto_approve(&state, connection_id) {
+        return true;
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel::<bool>();
-    ctx.app
-        .state::<AppState>()
-        .mcp_pending
-        .lock()
-        .unwrap()
-        .insert(id.clone(), tx);
+    state.mcp_pending.lock().unwrap().insert(
+        id.clone(),
+        PendingMcpConfirm {
+            connection_id: connection_id.to_string(),
+            tx,
+        },
+    );
     let _pending = PendingConfirmation {
         app: ctx.app.clone(),
         id: id.clone(),
@@ -526,7 +570,13 @@ async fn confirm(ctx: &Ctx, connection: &str, action: &str, detail: &str) -> boo
         .app
         .emit(
             "mcp-confirm",
-            json!({"id":id,"connection":connection,"action":action,"detail":detail}),
+            json!({
+                "id": id,
+                "connection": connection_label,
+                "connectionId": connection_id,
+                "action": action,
+                "detail": detail,
+            }),
         )
         .is_err()
     {
@@ -662,6 +712,20 @@ mod tests {
             "connection_not_found"
         );
     }
+    #[test]
+    fn auto_approve_follows_mode_and_session_trust() {
+        let state = AppState::default();
+        // Locked vault defaults to Ask and requires confirmation unless trusted.
+        assert!(!should_auto_approve(&state, "conn-1"));
+        state
+            .mcp_trusted_connections
+            .lock()
+            .unwrap()
+            .insert("conn-1".into());
+        assert!(should_auto_approve(&state, "conn-1"));
+        assert!(!should_auto_approve(&state, "conn-2"));
+    }
+
     #[tokio::test]
     async fn shutdown_cancels_existing_and_late_listeners() {
         let (tx, rx) = watch::channel(false);

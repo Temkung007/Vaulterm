@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::mcp;
 use crate::sftp::{self, BinaryContent, FileContent, FileEntry, SftpConn, WalkEntry, WriteResult};
 use crate::ssh::{self, SessionInput, SshConnectError};
-use crate::store::{Connection, KnownHost, Settings, Snippet};
+use crate::store::{Connection, KnownHost, McpApprovalMode, Settings, Snippet};
 use crate::tunnel::{self, Tunnel, TunnelInfo};
 use crate::vault::Vault;
 use crate::AppState;
@@ -142,7 +142,11 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     state
         .vault
-        .write(|d| d.settings = settings)
+        .write(|d| {
+            // Frontend `saveSettings` only edits `auto_lock_minutes`; preserve
+            // MCP configuration managed by dedicated commands.
+            d.settings.auto_lock_minutes = settings.auto_lock_minutes;
+        })
         .map_err(|e| e.to_string())
 }
 
@@ -668,23 +672,56 @@ pub struct McpStatus {
     pub running: bool,
     pub port: u16,
     pub token: Option<String>,
+    pub approval_mode: McpApprovalMode,
+    pub trusted_connection_count: usize,
 }
 
 fn mcp_snapshot(state: &AppState) -> Result<McpStatus, String> {
-    let (enabled, token) = state
+    let (enabled, token, approval_mode) = state
         .vault
-        .read(|d| (d.settings.mcp_enabled, d.settings.mcp_token.clone()))
+        .read(|d| {
+            (
+                d.settings.mcp_enabled,
+                d.settings.mcp_token.clone(),
+                d.settings.mcp_approval_mode,
+            )
+        })
         .map_err(|e| e.to_string())?;
     Ok(McpStatus {
         enabled,
         running: state.mcp.lock().unwrap().is_some(),
         port: mcp::MCP_PORT,
         token,
+        approval_mode,
+        trusted_connection_count: state.mcp_trusted_connections.lock().unwrap().len(),
     })
 }
 
 #[tauri::command]
 pub fn mcp_status(state: State<'_, AppState>) -> Result<McpStatus, String> {
+    mcp_snapshot(&state)
+}
+
+/// Persist the approval mode for mutating MCP tools (`ask`, `session`, `auto`).
+#[tauri::command]
+pub fn mcp_set_approval_mode(
+    state: State<'_, AppState>,
+    mode: McpApprovalMode,
+) -> Result<McpStatus, String> {
+    state
+        .vault
+        .write(|d| d.settings.mcp_approval_mode = mode)
+        .map_err(|e| e.to_string())?;
+    if mode == McpApprovalMode::Ask {
+        state.mcp_trusted_connections.lock().unwrap().clear();
+    }
+    mcp_snapshot(&state)
+}
+
+/// Clear all per-connection session approvals granted during this unlocked session.
+#[tauri::command]
+pub fn mcp_clear_trusted(state: State<'_, AppState>) -> Result<McpStatus, String> {
+    state.mcp_trusted_connections.lock().unwrap().clear();
     mcp_snapshot(&state)
 }
 
@@ -751,14 +788,15 @@ pub fn mcp_stop(state: State<'_, AppState>) {
     stop_mcp(&state);
 }
 
-/// Drop every pending approval and cancel active MCP requests together.
+/// Drop every pending approval, clear temporary session approvals, and cancel active MCP requests together.
 pub(crate) fn stop_mcp(state: &AppState) {
     let old = state.mcp.lock().unwrap().take();
     if let Some(h) = old {
         h.stop();
     }
-    for (_, tx) in state.mcp_pending.lock().unwrap().drain() {
-        let _ = tx.send(false);
+    state.mcp_trusted_connections.lock().unwrap().clear();
+    for (_, pending) in state.mcp_pending.lock().unwrap().drain() {
+        let _ = pending.tx.send(false);
     }
 }
 
@@ -783,38 +821,66 @@ async fn start_mcp(app: AppHandle, state: &AppState, token: String) -> Result<()
 
 /// Answer a pending dangerous-tool confirmation raised by the MCP server.
 #[tauri::command]
-pub fn mcp_confirm_respond(state: State<'_, AppState>, id: String, allow: bool) {
-    if let Some(tx) = state.mcp_pending.lock().unwrap().remove(&id) {
-        let _ = tx.send(allow);
+pub fn mcp_confirm_respond(
+    state: State<'_, AppState>,
+    id: String,
+    allow: bool,
+    trust_connection: Option<bool>,
+) {
+    if let Some(pending) = state.mcp_pending.lock().unwrap().remove(&id) {
+        if allow {
+            let mode = state
+                .vault
+                .read(|d| d.settings.mcp_approval_mode)
+                .unwrap_or_default();
+            if trust_connection.unwrap_or(false) || mode == McpApprovalMode::Session {
+                state
+                    .mcp_trusted_connections
+                    .lock()
+                    .unwrap()
+                    .insert(pending.connection_id);
+            }
+        }
+        let _ = pending.tx.send(allow);
     }
 }
 
 #[cfg(test)]
 mod mcp_lifecycle_tests {
     use super::stop_mcp;
-    use crate::AppState;
+    use crate::{AppState, PendingMcpConfirm};
 
     #[test]
     fn stopping_mcp_denies_and_removes_all_pending_approvals() {
         let state = AppState::default();
         let (first_tx, mut first_rx) = tokio::sync::oneshot::channel();
         let (second_tx, mut second_rx) = tokio::sync::oneshot::channel();
+        state.mcp_pending.lock().unwrap().insert(
+            "first".into(),
+            PendingMcpConfirm {
+                connection_id: "conn-1".into(),
+                tx: first_tx,
+            },
+        );
+        state.mcp_pending.lock().unwrap().insert(
+            "second".into(),
+            PendingMcpConfirm {
+                connection_id: "conn-2".into(),
+                tx: second_tx,
+            },
+        );
         state
-            .mcp_pending
+            .mcp_trusted_connections
             .lock()
             .unwrap()
-            .insert("first".into(), first_tx);
-        state
-            .mcp_pending
-            .lock()
-            .unwrap()
-            .insert("second".into(), second_tx);
+            .insert("conn-1".into());
 
         stop_mcp(&state);
 
         assert_eq!(first_rx.try_recv(), Ok(false));
         assert_eq!(second_rx.try_recv(), Ok(false));
         assert!(state.mcp_pending.lock().unwrap().is_empty());
+        assert!(state.mcp_trusted_connections.lock().unwrap().is_empty());
         assert!(state.mcp.lock().unwrap().is_none());
         // UI lock and the explicit stop command can both run during teardown.
         stop_mcp(&state);

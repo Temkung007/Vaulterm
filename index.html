@@ -29,7 +29,8 @@
           <pre id="mcp-confirm-detail" class="mcp-confirm__detail"></pre>
           <div class="form__actions">
             <button id="mcp-confirm-deny" type="button" class="btn btn--ghost">Deny</button>
-            <button id="mcp-confirm-allow" type="button" class="btn btn--primary">Allow</button>
+            <button id="mcp-confirm-allow-session" type="button" class="btn btn--ghost">Allow for this connection</button>
+            <button id="mcp-confirm-allow" type="button" class="btn btn--primary">Allow once</button>
           </div>
         </div>
       </div>
@@ -706,14 +707,26 @@
               <span>Token <em>(bearer)</em></span>
               <input id="mcp-token" type="text" readonly />
             </label>
+            <label class="form__row">
+              <span>Approval mode <em>(run_command / write_file)</em></span>
+              <select id="mcp-approval-mode">
+                <option value="ask">Ask every time</option>
+                <option value="session">Allow once per connection (this session)</option>
+                <option value="auto">Auto-approve all (no prompt)</option>
+              </select>
+            </label>
+            <div id="mcp-trusted-row" class="mcp-trusted-row hidden">
+              <span id="mcp-trusted-text" class="form__note"></span>
+              <button id="mcp-clear-trusted" type="button" class="btn btn--ghost btn--sm">Reset session approvals</button>
+            </div>
             <div class="backup-actions">
               <button id="mcp-copy-cli" type="button" class="btn btn--ghost">Copy Claude Code command</button>
               <button id="mcp-copy-json" type="button" class="btn btn--ghost">Copy Claude Desktop config</button>
             </div>
-            <p class="form__note">
+            <p id="mcp-approval-note" class="form__note">
               Serves on <code>127.0.0.1</code> only, while the vault is unlocked, and requires this
-              token. Read tools run directly; <strong>run_command / write_file ask you to approve each
-              call</strong> in this window.
+              token. Read tools run directly; <strong>run_command / write_file</strong> follow the
+              approval mode above.
             </p>
           </div>
 

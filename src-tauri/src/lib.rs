@@ -7,7 +7,7 @@ mod tunnel;
 mod vault;
 mod vault_pb;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
@@ -17,6 +17,12 @@ use sftp::SftpConn;
 use ssh::SessionInput;
 use tunnel::Tunnel;
 use vault::Vault;
+
+/// A pending MCP confirmation waiting for the user's decision in the UI.
+pub struct PendingMcpConfirm {
+    pub connection_id: String,
+    pub tx: tokio::sync::oneshot::Sender<bool>,
+}
 
 /// Shared application state.
 #[derive(Default)]
@@ -34,7 +40,9 @@ pub struct AppState {
     /// Serialize asynchronous MCP starts so concurrent UI requests share one server.
     pub mcp_start_lock: tokio::sync::Mutex<()>,
     /// Pending MCP dangerous-tool confirmations awaiting the user's decision.
-    pub mcp_pending: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+    pub mcp_pending: Mutex<HashMap<String, PendingMcpConfirm>>,
+    /// Connection ids temporarily allowed for MCP mutations in this unlocked session.
+    pub mcp_trusted_connections: Mutex<HashSet<String>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -108,6 +116,8 @@ pub fn run() {
             commands::tunnel_stop_all,
             commands::mcp_status,
             commands::mcp_set_enabled,
+            commands::mcp_set_approval_mode,
+            commands::mcp_clear_trusted,
             commands::mcp_autostart,
             commands::mcp_stop,
             commands::mcp_confirm_respond,

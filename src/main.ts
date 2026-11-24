@@ -632,7 +632,10 @@ async function enterApp(): Promise<void> {
   // Quietly check for a newer release; show a banner if one is available.
   void maybeShowUpdateBanner();
   // Start the MCP server if the user has enabled it.
-  void api.mcpAutostart().catch(() => {});
+  void api
+    .mcpAutostart()
+    .then((st) => renderMcpSettings(st))
+    .catch(() => {});
 }
 
 async function handleLockSubmit(e: SubmitEvent): Promise<void> {
@@ -661,6 +664,8 @@ async function lockApp(): Promise<void> {
   tunnels.hideForLock();
   actionsPanel.hideForLock();
   $("update-banner").classList.add("hidden");
+  mcpCurrentConfirm = null;
+  mcpConfirmQueue.length = 0;
   $("mcp-confirm-backdrop").classList.add("hidden");
   void api.mcpStop().catch(() => {});
   void api.tunnelStopAll().catch(() => {});
@@ -880,11 +885,33 @@ async function maybeShowUpdateBanner(): Promise<void> {
 
 // ---- MCP server (AI access) -------------------------------------------------
 
+let currentMcpApprovalMode: api.McpApprovalMode = "ask";
+
+function mcpApprovalHint(mode: api.McpApprovalMode): string {
+  switch (mode) {
+    case "session":
+      return "Read tools run directly; run_command / write_file ask once per connection and stay trusted until you lock the vault or close Termkin.";
+    case "auto":
+      return "Warning: run_command / write_file run immediately without prompting while the vault is unlocked.";
+    case "ask":
+    default:
+      return "Serves on 127.0.0.1 only, while the vault is unlocked, and requires this token. Read tools run directly; run_command / write_file ask you to approve each call (or trust a connection for the session).";
+  }
+}
+
 function renderMcpSettings(st: api.McpStatus): void {
+  currentMcpApprovalMode = st.approvalMode;
   $<HTMLInputElement>("mcp-enabled").checked = st.enabled;
   $("mcp-details").classList.toggle("hidden", !st.enabled);
   $<HTMLInputElement>("mcp-url").value = `http://127.0.0.1:${st.port}/mcp`;
   $<HTMLInputElement>("mcp-token").value = st.token ?? "";
+  $<HTMLSelectElement>("mcp-approval-mode").value = st.approvalMode;
+  $("mcp-approval-note").textContent = mcpApprovalHint(st.approvalMode);
+  const hasTrusted = st.trustedConnectionCount > 0;
+  $("mcp-trusted-row").classList.toggle("hidden", !hasTrusted);
+  if (hasTrusted) {
+    $("mcp-trusted-text").textContent = `${st.trustedConnectionCount} connection${st.trustedConnectionCount === 1 ? "" : "s"} trusted for this session.`;
+  }
   $("mcp-status").textContent = st.enabled
     ? st.running
       ? `Running on 127.0.0.1:${st.port}`
@@ -908,6 +935,26 @@ async function handleMcpToggle(): Promise<void> {
   } catch (e) {
     $("mcp-status").textContent = `Failed: ${typeof e === "string" ? e : String(e)}`;
     $<HTMLInputElement>("mcp-enabled").checked = !enabled;
+  }
+}
+
+async function handleMcpApprovalModeChange(): Promise<void> {
+  const select = $<HTMLSelectElement>("mcp-approval-mode");
+  const mode = select.value as api.McpApprovalMode;
+  try {
+    renderMcpSettings(await api.mcpSetApprovalMode(mode));
+  } catch (e) {
+    toast(`Couldn't update approval mode: ${errText(e)}`, "error");
+    void refreshMcpSettings();
+  }
+}
+
+async function handleMcpClearTrusted(): Promise<void> {
+  try {
+    renderMcpSettings(await api.mcpClearTrusted());
+    toast("Session approvals cleared", "info");
+  } catch (e) {
+    toast(`Couldn't clear session approvals: ${errText(e)}`, "error");
   }
 }
 
@@ -935,21 +982,52 @@ async function copyToClipboard(text: string, btn: HTMLButtonElement): Promise<vo
   }
 }
 
-let mcpConfirmId: string | null = null;
+let mcpCurrentConfirm: api.McpConfirm | null = null;
+const mcpConfirmQueue: api.McpConfirm[] = [];
 
-function showMcpConfirm(c: api.McpConfirm): void {
-  mcpConfirmId = c.id;
+function presentMcpConfirm(c: api.McpConfirm): void {
+  mcpCurrentConfirm = c;
   $("mcp-confirm-action").textContent = c.action === "write_file" ? "write a file" : "run a command";
   $("mcp-confirm-conn").textContent = c.connection;
   $("mcp-confirm-detail").textContent = c.detail;
+  const allowSessionBtn = $("mcp-confirm-allow-session");
+  const allowBtn = $("mcp-confirm-allow");
+  if (currentMcpApprovalMode === "session") {
+    allowSessionBtn.classList.add("hidden");
+    allowBtn.textContent = "Allow (trust for session)";
+  } else {
+    allowSessionBtn.classList.remove("hidden");
+    allowBtn.textContent = "Allow once";
+  }
   $("mcp-confirm-backdrop").classList.remove("hidden");
 }
 
-async function respondMcpConfirm(allow: boolean): Promise<void> {
-  const id = mcpConfirmId;
-  mcpConfirmId = null;
+function showMcpConfirm(c: api.McpConfirm): void {
+  if (mcpCurrentConfirm) {
+    mcpConfirmQueue.push(c);
+    return;
+  }
+  presentMcpConfirm(c);
+}
+
+async function respondMcpConfirm(allow: boolean, trustConnection = false): Promise<void> {
+  const current = mcpCurrentConfirm;
+  mcpCurrentConfirm = null;
   $("mcp-confirm-backdrop").classList.add("hidden");
-  if (id) await api.mcpConfirmRespond(id, allow).catch(() => {});
+  if (current) {
+    await api.mcpConfirmRespond(current.id, allow, trustConnection).catch(() => {});
+    if (allow && (trustConnection || currentMcpApprovalMode === "session")) {
+      for (let i = mcpConfirmQueue.length - 1; i >= 0; i--) {
+        if (mcpConfirmQueue[i].connectionId === current.connectionId) {
+          const [queued] = mcpConfirmQueue.splice(i, 1);
+          await api.mcpConfirmRespond(queued.id, true, false).catch(() => {});
+        }
+      }
+      void refreshMcpSettings();
+    }
+  }
+  const next = mcpConfirmQueue.shift();
+  if (next) presentMcpConfirm(next);
 }
 
 function closeSettings(): void {
@@ -1084,14 +1162,17 @@ function bindUi(): void {
   $("vault-import").addEventListener("click", () => void handleImportVault());
   $("update-check").addEventListener("click", () => void handleCheckUpdates());
   $("mcp-enabled").addEventListener("change", () => void handleMcpToggle());
+  $("mcp-approval-mode").addEventListener("change", () => void handleMcpApprovalModeChange());
+  $("mcp-clear-trusted").addEventListener("click", () => void handleMcpClearTrusted());
   $("mcp-copy-cli").addEventListener("click", (e) =>
     void copyToClipboard(mcpSnippets().cli, e.currentTarget as HTMLButtonElement),
   );
   $("mcp-copy-json").addEventListener("click", (e) =>
     void copyToClipboard(mcpSnippets().json, e.currentTarget as HTMLButtonElement),
   );
-  $("mcp-confirm-allow").addEventListener("click", () => void respondMcpConfirm(true));
-  $("mcp-confirm-deny").addEventListener("click", () => void respondMcpConfirm(false));
+  $("mcp-confirm-allow").addEventListener("click", () => void respondMcpConfirm(true, false));
+  $("mcp-confirm-allow-session").addEventListener("click", () => void respondMcpConfirm(true, true));
+  $("mcp-confirm-deny").addEventListener("click", () => void respondMcpConfirm(false, false));
   void api.onMcpConfirm((c) => showMcpConfirm(c));
   splitRightBtn.addEventListener("click", () => void splitActive("row"));
   splitDownBtn.addEventListener("click", () => void splitActive("col"));
