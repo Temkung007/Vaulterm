@@ -1,9 +1,9 @@
 # Releasing a signed update
 
-Vaulterm ships in-app auto-update (Settings → **Check for updates**). The app checks
+Termkin ships in-app auto-update (Settings → **Check for updates**). The app checks
 `https://github.com/Temkung007/Vaulterm/releases/latest/download/latest.json`, downloads the
-signed NSIS installer, verifies the signature against the public key baked into
-`src-tauri/tauri.conf.json`, installs it, and relaunches.
+signed installer (`.exe` on Windows, `.app.tar.gz` on macOS), verifies the signature against
+the public key baked into `src-tauri/tauri.conf.json`, installs it, and relaunches.
 
 ## Signing keys
 
@@ -11,11 +11,30 @@ signed NSIS installer, verifies the signature against the public key baked into
   **no password**. To add one, regenerate and update the public key:
   `pnpm tauri signer generate -f -p "<password>" -w ~/.tauri/vaulterm.key`, then paste the new
   `~/.tauri/vaulterm.key.pub` contents into `plugins.updater.pubkey` in `tauri.conf.json`.
+- **GitHub Actions secret:** store the private key in repository secret `TAURI_SIGNING_PRIVATE_KEY`
+  (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` only if you add a password) so CI can sign both
+  Windows and macOS builds.
 - **Public key:** already set in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`).
 - If the private key (or its password) is lost, existing installs can no longer verify updates
   until you ship a new build with a new public key.
 
-## Cut a release
+## Automated release (recommended — Windows + macOS)
+
+`.github/workflows/release.yml` builds signed Windows (`x64` NSIS) and macOS Universal
+(`aarch64` + `x86_64`) bundles and publishes a combined `latest.json` automatically:
+
+1. Bump the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`,
+   and refresh `src-tauri/Cargo.lock` (e.g. via `cargo test --manifest-path src-tauri/Cargo.toml`).
+2. Commit, tag `v<ver>`, and push with `--tags`:
+   ```sh
+   git tag v<ver>
+   git push origin main v<ver>
+   ```
+3. GitHub Actions creates a draft release, builds Windows and macOS sequentially so `latest.json`
+   includes all targets (`windows-x86_64`, `darwin-aarch64`, `darwin-x86_64`, `darwin-universal`),
+   verifies the manifest, and publishes the release.
+
+## Manual local release (Windows only)
 
 1. Bump the version in all three, keeping them identical:
    `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`.
