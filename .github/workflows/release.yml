@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build and release (e.g. v0.5.2)"
+        description: "Tag to build and release (e.g. v0.5.3)"
         required: true
         type: string
 
@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
       release_id: ${{ steps.create.outputs.id }}
     steps:
       - id: meta
@@ -55,8 +56,6 @@ jobs:
     needs: prepare
     strategy:
       fail-fast: false
-      # Serialize jobs so Windows and macOS never race while updating latest.json.
-      max-parallel: 1
       matrix:
         include:
           - platform: windows-latest
@@ -107,30 +106,52 @@ jobs:
           tagName: ${{ needs.prepare.outputs.tag }}
           releaseId: ${{ needs.prepare.outputs.release_id }}
           releaseDraft: true
-          includeUpdaterJson: true
-          updaterJsonPreferNsis: true
-          updaterJsonKeepUniversal: true
+          includeUpdaterJson: false
           args: ${{ matrix.args }}
 
   publish:
     needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
-      - name: Verify combined latest.json and publish release
+      - name: Build combined latest.json and publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
+          VER: ${{ needs.prepare.outputs.version }}
         run: |
-          gh release download "$TAG" -p "latest.json" -O latest.json
-          cat latest.json
+          export WIN_ASSET="Termkin_${VER}_x64-setup.exe"
+          export MAC_ASSET="Termkin_universal.app.tar.gz"
+          gh release download "$TAG" -p "${WIN_ASSET}.sig" -p "${MAC_ASSET}.sig"
           node -e '
             const fs = require("fs");
-            const data = JSON.parse(fs.readFileSync("latest.json", "utf8"));
-            for (const key of ["windows-x86_64", "darwin-aarch64", "darwin-x86_64", "darwin-universal"]) {
-              if (!data.platforms?.[key]?.url || !data.platforms?.[key]?.signature) {
-                throw new Error("Missing updater entry for " + key);
-              }
-            }
+            const repo = process.env.GH_REPO;
+            const tag = process.env.TAG;
+            const ver = process.env.VER;
+            const winSig = fs.readFileSync(process.env.WIN_ASSET + ".sig", "utf8").trim();
+            const macSig = fs.readFileSync(process.env.MAC_ASSET + ".sig", "utf8").trim();
+            if (!winSig || !macSig) throw new Error("Empty signature file");
+            const winUrl = `https://github.com/${repo}/releases/download/${tag}/${process.env.WIN_ASSET}`;
+            const macUrl = `https://github.com/${repo}/releases/download/${tag}/${process.env.MAC_ASSET}`;
+            const winEntry = { signature: winSig, url: winUrl };
+            const macEntry = { signature: macSig, url: macUrl };
+            const manifest = {
+              version: ver,
+              notes: `Termkin ${ver}`,
+              pub_date: new Date().toISOString(),
+              platforms: {
+                "windows-x86_64": winEntry,
+                "windows-x86_64-nsis": winEntry,
+                "darwin-aarch64": macEntry,
+                "darwin-x86_64": macEntry,
+                "darwin-universal": macEntry,
+                "darwin-aarch64-app": macEntry,
+                "darwin-x86_64-app": macEntry,
+                "darwin-universal-app": macEntry,
+              },
+            };
+            fs.writeFileSync("latest.json", JSON.stringify(manifest, null, 2));
           '
+          cat latest.json
+          gh release upload "$TAG" latest.json --clobber
           gh release edit "$TAG" --draft=false

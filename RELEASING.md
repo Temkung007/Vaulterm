@@ -30,9 +30,9 @@ the public key baked into `src-tauri/tauri.conf.json`, installs it, and relaunch
    git tag v<ver>
    git push origin main v<ver>
    ```
-3. GitHub Actions creates a draft release, builds Windows and macOS sequentially so `latest.json`
-   includes all targets (`windows-x86_64`, `darwin-aarch64`, `darwin-x86_64`, `darwin-universal`),
-   verifies the manifest, and publishes the release.
+3. GitHub Actions creates a draft release, builds Windows and macOS in parallel, merges
+   both signatures into `latest.json` (`windows-x86_64`, `darwin-aarch64`, `darwin-x86_64`,
+   `darwin-universal`), and publishes the release.
 
 ## Manual local release (Windows only)
 
