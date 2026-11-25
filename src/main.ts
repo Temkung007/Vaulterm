@@ -902,11 +902,14 @@ function mcpApprovalHint(mode: api.McpApprovalMode): string {
 function renderMcpSettings(st: api.McpStatus): void {
   currentMcpApprovalMode = st.approvalMode;
   $<HTMLInputElement>("mcp-enabled").checked = st.enabled;
+  $<HTMLInputElement>("mcp-auto-approve").checked = st.approvalMode === "auto";
   $("mcp-details").classList.toggle("hidden", !st.enabled);
   $<HTMLInputElement>("mcp-url").value = `http://127.0.0.1:${st.port}/mcp`;
   $<HTMLInputElement>("mcp-token").value = st.token ?? "";
   $<HTMLSelectElement>("mcp-approval-mode").value = st.approvalMode;
-  $("mcp-approval-note").textContent = mcpApprovalHint(st.approvalMode);
+  const noteEl = $("mcp-approval-note");
+  noteEl.textContent = mcpApprovalHint(st.approvalMode);
+  noteEl.classList.toggle("mcp-note--warn", st.approvalMode === "auto");
   const hasTrusted = st.trustedConnectionCount > 0;
   $("mcp-trusted-row").classList.toggle("hidden", !hasTrusted);
   if (hasTrusted) {
@@ -938,15 +941,23 @@ async function handleMcpToggle(): Promise<void> {
   }
 }
 
-async function handleMcpApprovalModeChange(): Promise<void> {
-  const select = $<HTMLSelectElement>("mcp-approval-mode");
-  const mode = select.value as api.McpApprovalMode;
+async function setMcpApprovalMode(mode: api.McpApprovalMode): Promise<void> {
   try {
     renderMcpSettings(await api.mcpSetApprovalMode(mode));
   } catch (e) {
     toast(`Couldn't update approval mode: ${errText(e)}`, "error");
     void refreshMcpSettings();
   }
+}
+
+async function handleMcpAutoApproveToggle(): Promise<void> {
+  const auto = $<HTMLInputElement>("mcp-auto-approve").checked;
+  await setMcpApprovalMode(auto ? "auto" : "ask");
+}
+
+async function handleMcpApprovalModeChange(): Promise<void> {
+  const select = $<HTMLSelectElement>("mcp-approval-mode");
+  await setMcpApprovalMode(select.value as api.McpApprovalMode);
 }
 
 async function handleMcpClearTrusted(): Promise<void> {
@@ -1028,6 +1039,25 @@ async function respondMcpConfirm(allow: boolean, trustConnection = false): Promi
   }
   const next = mcpConfirmQueue.shift();
   if (next) presentMcpConfirm(next);
+}
+
+async function respondMcpConfirmAlways(): Promise<void> {
+  const current = mcpCurrentConfirm;
+  mcpCurrentConfirm = null;
+  $("mcp-confirm-backdrop").classList.add("hidden");
+  try {
+    renderMcpSettings(await api.mcpSetApprovalMode("auto"));
+    toast("Auto-approve enabled — MCP won't prompt Allow anymore", "success");
+  } catch (e) {
+    toast(`Couldn't enable auto-approve: ${errText(e)}`, "error");
+  }
+  if (current) {
+    await api.mcpConfirmRespond(current.id, true, false).catch(() => {});
+  }
+  while (mcpConfirmQueue.length > 0) {
+    const queued = mcpConfirmQueue.shift();
+    if (queued) await api.mcpConfirmRespond(queued.id, true, false).catch(() => {});
+  }
 }
 
 function closeSettings(): void {
@@ -1162,6 +1192,7 @@ function bindUi(): void {
   $("vault-import").addEventListener("click", () => void handleImportVault());
   $("update-check").addEventListener("click", () => void handleCheckUpdates());
   $("mcp-enabled").addEventListener("change", () => void handleMcpToggle());
+  $("mcp-auto-approve").addEventListener("change", () => void handleMcpAutoApproveToggle());
   $("mcp-approval-mode").addEventListener("change", () => void handleMcpApprovalModeChange());
   $("mcp-clear-trusted").addEventListener("click", () => void handleMcpClearTrusted());
   $("mcp-copy-cli").addEventListener("click", (e) =>
@@ -1172,6 +1203,7 @@ function bindUi(): void {
   );
   $("mcp-confirm-allow").addEventListener("click", () => void respondMcpConfirm(true, false));
   $("mcp-confirm-allow-session").addEventListener("click", () => void respondMcpConfirm(true, true));
+  $("mcp-confirm-allow-always").addEventListener("click", () => void respondMcpConfirmAlways());
   $("mcp-confirm-deny").addEventListener("click", () => void respondMcpConfirm(false, false));
   void api.onMcpConfirm((c) => showMcpConfirm(c));
   splitRightBtn.addEventListener("click", () => void splitActive("row"));

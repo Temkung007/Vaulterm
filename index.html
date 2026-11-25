@@ -27,9 +27,10 @@
             on <strong><span id="mcp-confirm-conn"></span></strong>. Allow it?
           </p>
           <pre id="mcp-confirm-detail" class="mcp-confirm__detail"></pre>
-          <div class="form__actions">
+          <div class="form__actions mcp-confirm__actions">
             <button id="mcp-confirm-deny" type="button" class="btn btn--ghost">Deny</button>
             <button id="mcp-confirm-allow-session" type="button" class="btn btn--ghost">Allow for this connection</button>
+            <button id="mcp-confirm-allow-always" type="button" class="btn btn--ghost">Always allow</button>
             <button id="mcp-confirm-allow" type="button" class="btn btn--primary">Allow once</button>
           </div>
         </div>
@@ -696,6 +697,10 @@
           <label class="form__check">
             <input id="mcp-enabled" type="checkbox" />
             <span>Let an MCP client (Claude Desktop / Claude Code) use your saved connections</span>
+          </label>
+          <label class="form__check">
+            <input id="mcp-auto-approve" type="checkbox" />
+            <span>Auto-approve AI commands &amp; file writes <em>(skip Allow prompt)</em></span>
           </label>
           <p id="mcp-status" class="form__note"></p>
           <div id="mcp-details" class="hidden">

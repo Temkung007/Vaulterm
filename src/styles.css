@@ -2209,6 +2209,11 @@ textarea:focus-visible {
   user-select: none;
   color: var(--text);
 }
+.form__check em {
+  color: var(--text-faint);
+  font-style: normal;
+  font-weight: 400;
+}
 .form__check input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
@@ -2255,6 +2260,12 @@ textarea:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+.mcp-note--warn {
+  color: var(--warn, #eab308);
+}
+.mcp-confirm__actions {
+  flex-wrap: wrap;
 }
 .mcp-confirm__detail {
   max-height: 240px;
